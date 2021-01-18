@@ -1,0 +1,20 @@
+Package: libcdj
+Version: @PACKAGE_VERSION@
+Section: 
+Priority: optional
+Architecture: all
+Essential: no
+Depends: 
+Pre-Depends: 
+Recommends: 
+Suggests: 
+Installed-Size: @SIZE@
+Maintainer: teknopaul [teknopaul@tp23.org]
+Conflicts: 
+Replaces: 
+Provides: libcdj
+Description: Tools and libs for communicating with Pioneer CDJs and XDJs.
+
+
+
+
