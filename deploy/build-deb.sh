@@ -24,6 +24,7 @@ rm -r $tmp_dir ||:
 mkdir -p \
   $tmp_dir/DEBIAN \
   $tmp_dir/usr/bin \
+  $tmp_dir/usr/lib64 \
   $tmp_dir/usr/lib/x86_64-linux-gnu \
   $tmp_dir/usr/include/cdj
 
@@ -39,8 +40,10 @@ cp --archive \
     $tmp_dir/usr/bin
 
 # libs
-cp --archive target/*.so target/*.a \
+cp --archive target/*.a \
     $tmp_dir/usr/lib/x86_64-linux-gnu
+cp --archive target/*.so \
+    $tmp_dir/usr/lib64
 
 # hdrs
 cp --archive src/c/*.h \
