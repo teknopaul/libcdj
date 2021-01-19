@@ -5,16 +5,19 @@
 #include "cdj.h"
 #include "vdj.h"
 #include "vdj_net.h"
+#include "vdj_beat.h"
 
 
 static void vdj_usage()
 {
     printf("options:\n");
     printf("    -i - network interface to use, required if pc has more than one\n");
+    printf("    -p - player id (use one that no CDJ is currently displaying)\n");
     printf("    -c - mimic CDJ-1000\n");
     printf("    -x - mimic XDJ-1000\n");
     printf("    -m - mimic DJM\n");
-    printf("    -b - bpmm, if set vedj broadcasts beat info\n");
+    printf("    -b - bpm, if set vdj broadcasts beat info\n");
+    printf("    -M - start as master\n");
     printf("    -h - display this text\n");
     exit(0);
 }
@@ -36,6 +39,19 @@ static void vdj_main_discovery_handler(vdj_t* v, unsigned char* packet, int len)
     }
 }
 
+static void vdj_main_update_handler(vdj_t* v, unsigned char* packet, int len)
+{
+    cdj_cdj_status_packet_t* cs_pkt = cdj_new_cdj_status_packet(packet, len, CDJ_DISCOVERY_PORT); // TODO redundant info
+    if ( cs_pkt &&
+        cs_pkt->player_id &&
+        v->backline->link_members[cs_pkt->player_id]
+        ) {
+        
+        if ( cdj_status_counter(cs_pkt) % 100 == 0) {
+            printf("link member: %02i alive\n", cs_pkt->player_id);
+        }
+    }
+}
 /**
  * Virtual CDJ application entry point.
  */
@@ -45,12 +61,13 @@ int main(int argc, char *argv[])
     unsigned char player_id;
     char* iface = NULL;
     float bpm = 0.0;
+    char master = 0;
 
     // we need to know which interface to use
     // likely to have wifi and LAN for CDJs at home
     // TODO likely not to have DHCPd in a club
     int c;
-    while ( ( c = getopt(argc, argv, "p:i:b:hmxc") ) != EOF) {
+    while ( ( c = getopt(argc, argv, "p:i:b:hmxcM") ) != EOF) {
         switch (c) {
             case 'h':
                 vdj_usage();
@@ -67,6 +84,9 @@ int main(int argc, char *argv[])
             case 'c':
                 flags |= VDJ_FLAG_DEV_CDJ;
                 break;
+            case 'M':
+                master = 1;
+                break;
             case 'p':
                 player_id = atoi(optarg);
                 if (player_id < 0xf) flags |= player_id;
@@ -80,20 +100,21 @@ int main(int argc, char *argv[])
     /**
      * init the vdj
      */
-    vdj_t* v = vdj_init_iface(iface, flags);
-    if (v == NULL) {
+    vdj_t* v;
+    if ( ! (v = vdj_init_iface(iface, flags)) ) {
         fprintf(stderr, "error: creating virtual cdj\n");
         return 1;
     }
     if (bpm) v->bpm = bpm;
+    if (master) v->master = 1;
 
-    if (vdj_open_sockets(v) != CDJ_OK) {
+    if ( vdj_open_sockets(v) != CDJ_OK ) {
         fprintf(stderr, "error: failed to open sockets\n");
         vdj_destroy(v);
         return 1;
     }
 
-    if (vdj_handshake(v) != CDJ_OK) {
+    if ( vdj_exec_discovery(v) != CDJ_OK ) {
         fprintf(stderr, "error: cdj initialization\n");
         vdj_destroy(v);
         return 1;
@@ -112,12 +133,31 @@ int main(int argc, char *argv[])
         return 1;
     }
 
-    if ( vdj_init_status_thread(v) != CDJ_OK ) {
+    sleep(2);
+    if ( vdj_init_managed_update_thread(v, vdj_main_update_handler) != CDJ_OK ) {
         fprintf(stderr, "error: init managed discovery thread\n");
         sleep(1);
         vdj_destroy(v);
         return 1;
     }
+
+    if ( vdj_init_status_thread(v) != CDJ_OK ) {
+        fprintf(stderr, "error: init status thread\n");
+        sleep(1);
+        vdj_destroy(v);
+        return 1;
+    }
+
+    if ( bpm > 0.0 ) {
+        if ( vdj_init_beat_thread(v) != CDJ_OK )  {
+            fprintf(stderr, "error: init beat thread\n");
+            sleep(1);
+            vdj_destroy(v);
+            return 1;
+       }
+       vdj_start_beat_thread(v);
+    }
+
 
     while (1) sleep(1);
 

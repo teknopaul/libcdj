@@ -14,8 +14,6 @@
 static unsigned _Atomic vdj_beat_running = ATOMIC_VAR_INIT(0);
 static unsigned _Atomic vdj_beat_paused = ATOMIC_VAR_INIT(1);
 
-static char bar_pos;
-
 static long int 
 vdj_one_beat_nanos(float bpm)
 {
@@ -30,18 +28,6 @@ vdj_one_beat_time(float bpm)
     ts.tv_sec = nanos / 1000000000L;
     ts.tv_nsec = nanos % 1000000000L;
     return ts;
-}
-
-static void
-vdj_send_beat(vdj_t* v)
-{
-    int length;
-    unsigned char* packet = cdj_create_beat_packet(&length, v->model, v->device_type, v->player_id, v->bpm, bar_pos++);
-    if (packet) {
-        vdj_broadcast(v, packet, length);
-        free(packet);
-    }
-    if (bar_pos == 4) bar_pos = 0;
 }
 
 static void*
@@ -60,10 +46,11 @@ vdj_beat_loop(void* arg)
         }
         if (was_paused) {
             was_paused = 0;
-            bar_pos = 0;
+            v->bar_pos = 0;
         }
 
-        vdj_send_beat(v);
+        vdj_broadcast_beat(v, v->bar_pos++);
+        if (v->bar_pos == 4) v->bar_pos = 0;
 
         sl = vdj_one_beat_time(v->bpm);
         nanosleep(&sl, NULL);
@@ -83,8 +70,26 @@ vdj_init_beat_thread(vdj_t* v)
     return CDJ_OK;
 }
 
+
+// kill
 void
 vdj_stop_beat_thread(vdj_t* v)
 {
+    v->active = 0;
     vdj_beat_running = 0;
+}
+
+
+void
+vdj_start_beat_thread(vdj_t* v)
+{
+    v->active = 1;
+    vdj_beat_paused = 0;
+}
+
+void
+vdj_pause_beat_thread(vdj_t* v)
+{
+    v->active = 0;
+    vdj_beat_paused = 1;
 }

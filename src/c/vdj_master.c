@@ -14,6 +14,8 @@ To switch master the following is needed
 - expect a response on 50001
 - when current master's status packet Mh says your own player_id you can assert this in your own status packets
 
+TODO manage v->backline->sync_counter this increments with every handoff
+
 */
 
 void
@@ -40,7 +42,7 @@ vdj_request_master(vdj_t* v)
         m = vdj_get_link_member(v, master_id);
         if (m) {
            dest = vdj_alloc_dest_addr(m, CDJ_UPDATE_PORT);
-           vdj_update(v, dest, packet, length);
+           vdj_sendto_update(v, dest, packet, length);
            free(dest);
         }
     }

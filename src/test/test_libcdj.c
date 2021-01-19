@@ -14,7 +14,11 @@ int main(int argc, const char *argv[])
     int n = 99;
     char master = 0;
 
-    unsigned char model = 'V';
+    unsigned char model = 'X';
+    unsigned char bar_pos = 3;
+    unsigned char active = 1;
+    unsigned int sync_counter = 99;
+
 
     unsigned char mac[6] = { 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, };
     unsigned char player_id = 5;
@@ -42,20 +46,20 @@ int main(int argc, const char *argv[])
     inet_ntop(AF_INET, &ip_lin->sin_addr.s_addr, ip_s, INET_ADDRSTRLEN);
     printf("lin ip='%s'\n", ip_s);
 
-char my_ip_s[INET6_ADDRSTRLEN];
-struct sockaddr_in my_ip;
-u_int32_t my_int1 = 0xc0a8010a;
-my_ip.sin_addr.s_addr = htonl(my_int1);
+    char my_ip_s[INET6_ADDRSTRLEN];
+    struct sockaddr_in my_ip;
+    u_int32_t my_int1 = 0xc0a8010a;
+    my_ip.sin_addr.s_addr = htonl(my_int1);
     inet_ntop(AF_INET, &my_ip.sin_addr.s_addr, my_ip_s, INET_ADDRSTRLEN);
     printf("ip='%s' %x\n", my_ip_s, my_ip.sin_addr.s_addr);
 
-u_int32_t my_int2 = 0xc0a8010b;
-my_ip.sin_addr.s_addr = htonl(my_int2);
+    u_int32_t my_int2 = 0xc0a8010b;
+    my_ip.sin_addr.s_addr = htonl(my_int2);
     inet_ntop(AF_INET, &my_ip.sin_addr.s_addr, my_ip_s, INET_ADDRSTRLEN);
     printf("ip='%s' %x\n", my_ip_s, my_ip.sin_addr.s_addr);
 
-u_int32_t my_int3 = 0xc0a8010c;
-my_ip.sin_addr.s_addr = htonl(my_int3);
+    u_int32_t my_int3 = 0xc0a8010c;
+    my_ip.sin_addr.s_addr = htonl(my_int3);
     inet_ntop(AF_INET, &my_ip.sin_addr.s_addr, my_ip_s, INET_ADDRSTRLEN);
     printf("ip='%s' %x\n", my_ip_s, my_ip.sin_addr.s_addr);
 
@@ -74,33 +78,35 @@ my_ip.sin_addr.s_addr = htonl(my_int3);
     unsigned char device_type = 2;
     int len;
     unsigned char* packet = cdj_create_initial_discovery_packet(&len, model, device_type);
-    printf("%x initial ", len);
+    printf("len=%x initial ", len);
     cdj_print_packet(packet, len, 50000);
 
     packet = cdj_create_stage1_discovery_packet(&len, model, device_type, mac, 1);
-    printf("%x stage1 ", len);
+    printf("len=%x stage1 ", len);
     cdj_print_packet(packet, len, 50000);
 
     packet = cdj_create_stage2_discovery_packet(&len, model, device_type, ip, mac, player_id, 0);
-    printf("%x stage2 ", len);
+    printf("len=%x stage2 ", len);
     cdj_print_packet(packet, len, 50000);
 
 
     packet = cdj_create_final_discovery_packet(&len, model, device_type, player_id, 0);
-    printf("%x final stage ", len);
+    printf("len=%x final stage ", len);
     cdj_print_packet(packet, len, 50000);
 
     packet = cdj_create_keepalive_packet(&len, model, device_type, ip, mac, player_id);
-    printf("%x keepalive ", len);
+    printf("len=%x keepalive ", len);
     cdj_print_packet(packet, len, 50000);
 
     packet = cdj_create_beat_packet(&len, model, device_type, player_id, 120.00, 3);
-    printf("%x beat ", len);
+    printf("len=%x beat ", len);
     cdj_print_packet(packet, len, 50001);
 
 
-    packet = cdj_create_status_packet(&len, model, player_id, 120.00, 1, master, n);
-    printf("%x status ", len);
+    packet = cdj_create_status_packet(&len, model, player_id,
+        120.00, bar_pos, active, master, sync_counter, 
+        n);
+    printf("len=%x status ", len);
     cdj_print_packet(packet, len, 50001);
 
 

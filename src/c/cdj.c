@@ -386,7 +386,7 @@ cdj_status_player_id(cdj_cdj_status_packet_t* cs_pkt)
     return cs_pkt->data[0x20];
 }
 
-// should be 1 or zero, 1 means busy, not necessarilyplaying audio, can be loading a track
+// should be 1 or zero, 1 means busy, not necessarily playing audio, can be loading a track
 unsigned char
 cdj_status_active(cdj_cdj_status_packet_t* cs_pkt)
 {
@@ -473,7 +473,7 @@ unsigned int
 cdj_status_sync_counter(cdj_cdj_status_packet_t* cs_pkt)
 {
     if (cs_pkt->len < 0x84) return 0;
-    return cdj_read_u16int(cs_pkt->data, 0x84);
+    return cdj_read_uint(cs_pkt->data, 0x84);
 }
 /**
  * return a bit mask, or play state, e.g. flag & with CDJ_PLAY_STATE_*
@@ -545,7 +545,12 @@ cdj_status_pitch_per_fader(cdj_cdj_status_packet_t* cs_pkt)
     if (cs_pkt->len < 0xc2) return 0;
     return cdj_read_uint(cs_pkt->data, 0xc0);
 }
-
+unsigned int
+cdj_status_counter(cdj_cdj_status_packet_t* cs_pkt)
+{
+    if (cs_pkt->len < 0xcb) return 0;
+    return cdj_read_uint(cs_pkt->data, 0xc8);
+}
 
 // beat
 
@@ -612,16 +617,16 @@ cdj_set_device_name(unsigned char* packet_pt, unsigned char model)
 unsigned char*
 cdj_create_initial_discovery_packet(int* length, unsigned char model, char device_type)
 {
-    *length = 37;
+    *length = 0x25;
     unsigned char* packet = (unsigned char*) calloc(1, *length);
     if (packet) {
         cdj_set_header(packet, CDJ_DISCOVERY);
         cdj_set_device_name(packet + cdj_header_len(50000, CDJ_DISCOVERY), model);
-        packet[32] = 0x01;
-        packet[33] = 0x02;
-        packet[34] = 0x00;
-        packet[35] = *length;
-        packet[36] = device_type; // CDJ (mixer is 0x02)
+        packet[0x20] = 0x01;
+        packet[0x21] = 0x02;
+        packet[0x22] = 0x00;
+        packet[0x23] = *length;
+        packet[0x24] = device_type; // CDJ (mixer is 0x02)
     }
     return packet;
 }
@@ -630,18 +635,18 @@ cdj_create_initial_discovery_packet(int* length, unsigned char model, char devic
 unsigned char*
 cdj_create_stage1_discovery_packet(int* length, unsigned char model, char device_type, unsigned char *mac, unsigned char n)
 {
-    *length = 44;
+    *length = 0x26;
     unsigned char* packet = (unsigned char*) calloc(1, *length);
     if (packet) {
         cdj_set_header(packet, CDJ_PLAYER_NUM_DISCOVERY);
         cdj_set_device_name(packet + cdj_header_len(50000, CDJ_DISCOVERY), model);
-        packet[32] = 0x01;
-        packet[33] = 0x02;
-        packet[34] = 0x00;
-        packet[35] = *length;
-        packet[36] = n;
-        packet[37] = device_type; // CDJ (mixer is 0x02)
-        memcpy(packet + 38, mac, 6);
+        packet[0x20] = 0x01;
+        packet[0x21] = 0x02;
+        packet[0x22] = 0x00;
+        packet[0x23] = *length;
+        packet[0x24] = n;
+        packet[0x25] = device_type; // CDJ (mixer is 0x02)
+        memcpy(packet + 0x26, mac, 6);
     }
     return packet;
 }
@@ -710,25 +715,25 @@ cdj_inc_final_discovery_packet(unsigned char* packet)
 unsigned char*
 cdj_create_keepalive_packet(int* length, unsigned char model, char device_type, unsigned char* ip, unsigned char* mac, unsigned char player_id)
 {
-    *length = 54;
+    *length = 0x36;
     unsigned char* packet = (unsigned char*) calloc(1, *length);
     if (packet) {
         cdj_set_header(packet, CDJ_KEEP_ALIVE);
         cdj_set_device_name(packet + cdj_header_len(50000, CDJ_DISCOVERY), model);
-        packet[32] = 0x01;
-        packet[33] = 0x02;
-        packet[34] = 0x00;
-        packet[35] = *length;
-        packet[36] = player_id;
+        packet[0x20] = 0x01;
+        packet[0x21] = 0x02;
+        packet[0x22] = 0x00;
+        packet[0x23] = *length;
+        packet[0x24] = player_id;
         packet[0x25] = 0x02;
         memcpy(packet + 38, mac, 6);
         memcpy(packet + 44, ip, 4);
-        packet[48] = 0x01;
-        packet[49] = 0x00;
-        packet[50] = 0x00;
-        packet[51] = 0x00;
-        packet[52] = device_type; // CDJ (mixer is 0x02)
-        packet[53] = 0x00;
+        packet[0x30] = 0x01;
+        packet[0x31] = 0x00;
+        packet[0x32] = 0x00;
+        packet[0x33] = 0x00;
+        packet[0x34] = device_type; // CDJ (mixer is 0x02)
+        packet[0x35] = 0x00;
     }
     return packet;
 }
@@ -758,8 +763,8 @@ cdj_set_u16int(unsigned char* packet_pt, unsigned int i)
  * this code presumes constant bpm and/or that CDJs can handle the fact that between beat messages BPM may change.
  * a lot of redundant info for house music, I dont see when the client armed with beat time and BPM cant do this calculation themselves, or why the need it?
  *
- * N.B> Pioneer send the tracks base BPM and then the pitch adjust, instead of sending the actual BPM (TODO presumably tempo for master tempo mde)
- * Bu tthe BPM is sent every message so one wonders why?  Maybe to enable key matching?
+ * N.B. Pioneer send the tracks base BPM and then the pitch adjust, instead of sending the actual BPM (TODO presumably tempo for master tempo mde)
+ * But the BPM is sent every message so one wonders why?  Maybe to enable key matching?
  *
  * @param bar_index - 0 ,3, where in the bar we are, presumes 4/4
  */ 
@@ -822,25 +827,27 @@ cdj_create_beat_packet(int* length, unsigned char model, char device_type, unsig
 
 
 unsigned char*
-cdj_create_status_packet(int* length, unsigned char model, unsigned char player_id, float bpm, unsigned char bar_index, char master, unsigned int n)
+cdj_create_status_packet(int* length, unsigned char model, unsigned char player_id,
+    float bpm, unsigned char bar_index, unsigned char active, unsigned char master, unsigned int sync_counter,
+    unsigned int n)
 {
     *length = 0xd4;
     unsigned char* packet = (unsigned char*) calloc(1, *length);
     if (packet) {
         cdj_set_header(packet, CDJ_STATUS);
-        cdj_set_device_name(packet + cdj_header_len(50001, 0), model);
+        cdj_set_device_name(packet + cdj_header_len(CDJ_UPDATE_PORT, CDJ_STATUS), model);
         packet[0x1f] = 0x01;
         packet[0x20] = 0x03;
         packet[0x21] = player_id;
         packet[0x23] = 0xb0;
         packet[0x24] = player_id;
         packet[0x25] = 0x00;
-        packet[0x26] = 0x01;
+        packet[0x26] = 0x00;       // unknown
 
-        packet[0x27] = 0x01;       // A active
+        packet[0x27] = active;     // A  active
         packet[0x28] = player_id;  // Dr trackloaded from myself
         packet[0x29] = 0x03;       // Sr track loaded from USB
-        packet[0x2a] = 0x01;       // Tr track supports beat grid (we thus have to bradcast beat frames)
+        packet[0x2a] = 0x01;       // Tr track supports beat grid (we thus have to broadcast beat frames)
 
 
         packet[0x3a] = 0xa0;
@@ -852,8 +859,13 @@ cdj_create_status_packet(int* length, unsigned char model, unsigned char player_
         cdj_set_int(packet + 0x2c, 0x01); // static 1 for the moment since we don yet support media queries
         cdj_set_int(packet + 0x30, 0x01); // track number
 
+
+        packet[0x68] = 0x01; // wtf
+        packet[0x73] = 0x04; // SD nomedia
+        packet[0x75] = 0x01; // link available (we dont have link yet but without this flag XDJ will not sync)
+        packet[0x78] = 0x01; // wtf
         // play mode
-        packet[0x7b] = 0x03;       // normal
+        packet[0x7b] = active ? 0x04 : 0x05;       // playing in a loop | paused
 
         // firmware version  31 2e 30 35  "1.05" XDJ does not seem to care
         packet[0x7c] = 0x31;  // 1
@@ -861,10 +873,12 @@ cdj_create_status_packet(int* length, unsigned char model, unsigned char player_
         packet[0x7e] = 0x30;  // 0
         packet[0x7f] = 0x35;  // 5
 
-        // sync counter
-        cdj_set_int(packet + 0x84, 0x01);  // TODO should come from highes sync_counter in the backline
+        cdj_set_int(packet + 0x84, sync_counter);
 
-        packet[0x89] = CDJ_PLAY_STATE_BASE | CDJ_PLAY_STATE_PLAY; // TODO nexus flags play & master & sync & onair
+        packet[0x89] = CDJ_PLAY_STATE_BASE | CDJ_PLAY_STATE_PLAY; // TODO nexus flags sync & onair
+        if (active) {
+            packet[0x89] |= CDJ_PLAY_STATE_PLAY;
+        }
         if (master) {
             packet[0x89] |= CDJ_PLAY_STATE_MASTER;
         }
@@ -878,16 +892,18 @@ cdj_create_status_packet(int* length, unsigned char model, unsigned char player_
 
         // bpm
         // Mv 
-        cdj_set_u16int(packet + 0x90, 0x8000); // TODO Mv for master handoffs  backline->master_new
+        cdj_set_u16int(packet + 0x90, 0x8000); // 8000 is track loaded, you can sync from me, Mv for master handoffs  backline->master_new
         // bpm x 100  as an int
         cdj_set_u16int(packet + 0x92, (int) (bpm * 100.0));
 
-        packet[0x9e] = master ? : 0x01 | 0xff;  // I am the master
-        packet[0x9f] = 0xff;  // master handoff, new_master goes here if we get sent a master_req
+        packet[0x9e] = master ? 0x01 : 0x00;  // Mm Now I am the master
+        packet[0x9f] = 0xff;  // Mh master handoff, new_master goes here if we get sent a master_req
 
         cdj_set_int(packet + 0xc4, CDJ_PITCH_NORMAL);
         // magic / unknown
         cdj_set_int(packet + 0x94, 0x7fffffff);
+
+        packet[0xa6] = 1 + bar_index;
 
         cdj_set_int(packet + 0xc8, n);
         packet[0xcc] = 0x0f;  // I am nexus
@@ -900,7 +916,7 @@ cdj_create_status_packet(int* length, unsigned char model, unsigned char player_
 unsigned char*
 cdj_create_master_request_packet(int* length, unsigned char model, unsigned char player_id)
 {
-    *length = 0x27;
+    *length = 0x28;
     unsigned char* packet = (unsigned char*) calloc(1, *length);
     if (packet) {
         cdj_set_header(packet, CDJ_MASTER_REQ);
@@ -919,7 +935,7 @@ cdj_create_master_request_packet(int* length, unsigned char model, unsigned char
 unsigned char*
 cdj_create_master_response_packet(int* length, unsigned char model, unsigned char player_id)
 {
-    *length = 0x2b;
+    *length = 0x2c;
     unsigned char* packet = (unsigned char*) calloc(1, *length);
     if (packet) {
         cdj_set_header(packet, CDJ_MASTER_REQ);
@@ -936,7 +952,7 @@ cdj_create_master_response_packet(int* length, unsigned char model, unsigned cha
 unsigned char*
 cdj_create_sync_control_packet(int* length, unsigned char model, unsigned char player_id, int on_off)
 {
-    *length = 0x2b;
+    *length = 0x2c;
     unsigned char* packet = (unsigned char*) calloc(1, *length);
     if (packet) {
         cdj_set_header(packet, CDJ_SYNC_CONTROL);

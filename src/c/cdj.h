@@ -177,10 +177,6 @@ cdj_new_cdj_status_packet(unsigned char* packet, int length, int port);
 void 
 cdj_print_packet(unsigned char* packet, int length, int port);
 
-// Global variables
-
-int64_t cdj_tempo_master;
-int64_t cdj_tempo;
 
 // Functions
 
@@ -227,6 +223,8 @@ unsigned char cdj_status_new_master(cdj_cdj_status_packet_t* cs_pkt);
 unsigned int cdj_status_bpm(cdj_cdj_status_packet_t* cs_pkt);
 unsigned int cdj_status_pitch(cdj_cdj_status_packet_t* cs_pkt);
 float cdj_status_calculated_bpm(cdj_cdj_status_packet_t* cs_pkt);
+unsigned int cdj_status_counter(cdj_cdj_status_packet_t* cs_pkt);
+
 unsigned char cdj_packet_type(unsigned char* data, int len);
 int cdj_validate_header(unsigned char* data, int len, int port, int* packet_type);
 
@@ -254,7 +252,9 @@ void           cdj_inc_final_discovery_packet(unsigned char* packet);
 
 unsigned char* cdj_create_beat_packet(int* length, unsigned char model, char device_type, unsigned char player_id, float bpm, unsigned char bar_pos);
 
-unsigned char* cdj_create_status_packet(int* length, unsigned char model, unsigned char player_id, float bpm, unsigned char bar_index, char master, unsigned int n);
+unsigned char* cdj_create_status_packet(int* length, unsigned char model, unsigned char player_id,
+    float bpm, unsigned char bar_index, unsigned char active, unsigned char master, unsigned int sync_counter,
+    unsigned int n);
 
 unsigned char* cdj_create_master_request_packet(int* length, unsigned char model, unsigned char player_id);
 unsigned char* cdj_create_master_response_packet(int* length, unsigned char model, unsigned char player_id);

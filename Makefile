@@ -2,8 +2,7 @@ name = libcdj
 tmp_dir := /tmp/$(name)_debbuild
 arch != uname -m
 
-contents := $(shell test -f deploy/DEBIAN/control || sudo deploy/build-deb.sh)
-version != grep 'Version:' deploy/DEBIAN/control | awk '{print $$2}'
+version != cat version | awk -F= '{print $$2}'
 
 CFLAGS = -fPIC -DPIC -Wall -Werror
 

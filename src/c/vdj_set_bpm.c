@@ -71,7 +71,7 @@ int main(int argc, char *argv[])
         return 1;
     }
 
-    if (vdj_handshake(v) != CDJ_OK) {
+    if (vdj_exec_discovery(v) != CDJ_OK) {
         fprintf(stderr, "error: cdj initialization\n");
         vdj_destroy(v);
         return 1;

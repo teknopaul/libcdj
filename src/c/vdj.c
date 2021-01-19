@@ -83,7 +83,7 @@ vdj_init_iface(char* iface, unsigned int flags)
     return NULL;
 }
 
-// This is public so you can start with a specific IP on an interface wtih two IPs
+// This is public so you can start with a specific IP on an interface with two IPs
 vdj_t*
 vdj_init(unsigned char* mac, char* ip_address, struct sockaddr_in* ip_addr, struct sockaddr_in* netmask, struct sockaddr_in *broadcast_addr, unsigned int flags)
 {
@@ -122,6 +122,8 @@ vdj_init(unsigned char* mac, char* ip_address, struct sockaddr_in* ip_addr, stru
             v->model = CDJ_CDJ;
             v->device_type = CDJ_DEV_TYPE_CDJ;
         }
+
+        v->status_counter = 1;
 
     }
     return v;
@@ -199,7 +201,7 @@ vdj_close_sockets(vdj_t* v)
  * This method blocks the main thread.
  */
 int
-vdj_handshake(vdj_t* v)
+vdj_exec_discovery(vdj_t* v)
 {
     // TODO too much protocol knowledge in this method
     int res, length;
@@ -207,27 +209,27 @@ vdj_handshake(vdj_t* v)
     unsigned char* packet = cdj_create_initial_discovery_packet(&length, v->model, v->device_type);
     if (packet == NULL) return CDJ_ERROR;
 
-    res = vdj_discovery(v, packet, length);
+    res = vdj_sendto_discovery(v, packet, length);
     if (res != CDJ_OK) {
         return CDJ_ERROR;
     }
     usleep(300000);
-    vdj_discovery(v, packet, length);
+    vdj_sendto_discovery(v, packet, length);
     usleep(300000);
-    vdj_discovery(v, packet, length);
+    vdj_sendto_discovery(v, packet, length);
     usleep(300000);
     free(packet);
 
     packet = cdj_create_stage1_discovery_packet(&length, v->model, v->device_type, v->mac, 0);
     if (packet == NULL) return CDJ_ERROR;
     
-    vdj_discovery(v, packet, length);
+    vdj_sendto_discovery(v, packet, length);
     usleep(300000);
     cdj_inc_stage1_discovery_packet(packet);
-    vdj_discovery(v, packet, length);
+    vdj_sendto_discovery(v, packet, length);
     usleep(300000);
     cdj_inc_stage1_discovery_packet(packet);
-    vdj_discovery(v, packet, length);
+    vdj_sendto_discovery(v, packet, length);
     usleep(300000);
     free(packet);
 
@@ -246,7 +248,7 @@ vdj_handshake(vdj_t* v)
 */
     packet = cdj_create_final_discovery_packet(&length, v->model, v->device_type, v->player_id, 1);
     if (packet == NULL) return CDJ_ERROR;
-    vdj_discovery(v, packet, length);
+    vdj_sendto_discovery(v, packet, length);
     usleep(300000);
 
     return CDJ_OK;
@@ -260,7 +262,7 @@ vdj_send_keepalive(vdj_t* v)
     int length;
     unsigned char* packet = cdj_create_keepalive_packet(&length, v->model, v->device_type, v->ip, v->mac, v->player_id);
     if (packet) {
-        vdj_discovery(v, packet, length);
+        vdj_sendto_discovery(v, packet, length);
         free(packet);
     }
 }
@@ -269,10 +271,28 @@ static void*
 vdj_keepalive_loop(void* arg)
 {
     vdj_t* v = arg;
+
+    int i;
+    vdj_link_member_t* m;
+
     vdj_keepalive_running = 1;
     while (vdj_keepalive_running) {
         usleep(CDJ_KEEPALIVE_INTERVAL * 1000);
+
         vdj_send_keepalive(v);
+
+        if (v->backline) {
+            time_t now = time(NULL);
+            for (i = 0; i < VDJ_MAX_BACKLINE; i++) {
+                if ( (m = v->backline->link_members[i]) ) {
+                    if ( m->last_keepalive < now - 7 ) {
+                        // dont free() thread issues, just mark it as gone
+                        m->gone = 1;
+                        m->active = 0;
+                    }
+                }
+            }
+        }
     }
     return NULL;
 }
@@ -304,7 +324,9 @@ vdj_send_status(vdj_t* v)
     struct sockaddr_in* dest;
 
     if (v->backline) {
-        unsigned char* packet = cdj_create_status_packet(&length, v->model, v->player_id, v->bpm, 1, v->master, v->status_counter++);
+        unsigned char* packet = cdj_create_status_packet(&length, v->model, v->player_id, 
+            v->bpm, v->bar_pos, v->active, v->master, v->backline ? v->backline->sync_counter : 1,
+            v->status_counter++);
         if (packet == NULL) {
             return CDJ_ERROR;
         }
@@ -312,11 +334,13 @@ vdj_send_status(vdj_t* v)
         for ( i = 0; i < VDJ_MAX_BACKLINE; i++) {
             if ( (m = v->backline->link_members[i]) && m->mip_addr) {
                 dest = vdj_alloc_dest_addr(m, CDJ_UPDATE_PORT);
-                rv |= vdj_update(v, dest, packet, length);
+                rv |= vdj_sendto_update(v, dest, packet, length);
                 free(dest);
                 //printf("update sent to player_id=%02i err=%i len=%i\n", i, rv, length);
             }
         }
+
+        cdj_print_packet(packet, length, CDJ_UPDATE_PORT);
     }
     return rv;
 }
@@ -333,6 +357,9 @@ vdj_status_loop(void* arg)
     return NULL;
 }
 
+/**
+ * sends out status to the network
+ */
 int
 vdj_init_status_thread(vdj_t* v)
 {
@@ -360,20 +387,16 @@ vdj_stop_threads(vdj_t* v)
     vdj_keepalive_running = 0;
 }
 
-
-
 void
 vdj_broadcast_beat(vdj_t* v, unsigned char bar_pos)
 {
     int length;
-
     unsigned char* packet = cdj_create_beat_packet(&length, v->model, v->device_type, v->player_id, v->bpm, bar_pos);
     if (packet) {
-        vdj_broadcast(v, packet, length);
+        vdj_sendto_broadcast(v, packet, length);
         free(packet);
     }
 }
-
 
 // networks methods
 
@@ -624,7 +647,7 @@ vdj_close_send_socket(vdj_t* v)
  * send a packet from discovery_socket_fd to broadcast:50000
  */
 int
-vdj_discovery(vdj_t* v, unsigned char* packet, int packet_length)
+vdj_sendto_discovery(vdj_t* v, unsigned char* packet, int packet_length)
 {
     int flags = 0;
     struct sockaddr_in dest;
@@ -650,7 +673,7 @@ vdj_discovery(vdj_t* v, unsigned char* packet, int packet_length)
  * used to send out beat timing
  */
 int
-vdj_broadcast(vdj_t* v, unsigned char* packet, int packet_length)
+vdj_sendto_broadcast(vdj_t* v, unsigned char* packet, int packet_length)
 {
     int flags = 0;
     struct sockaddr_in dest;
@@ -675,7 +698,7 @@ vdj_broadcast(vdj_t* v, unsigned char* packet, int packet_length)
  * send a packet from send_socket_fd to remote:50002 (or anywhere else)
  */
 int
-vdj_update(vdj_t* v, struct sockaddr_in* dest, unsigned char* packet, int packet_length)
+vdj_sendto_update(vdj_t* v, struct sockaddr_in* dest, unsigned char* packet, int packet_length)
 {
     int flags = 0;
     if (v->send_socket_fd == 0) {
@@ -695,7 +718,6 @@ vdj_update(vdj_t* v, struct sockaddr_in* dest, unsigned char* packet, int packet
 
 
 // input, loops to read from the network
-
 
 struct vdj_thread_info {
     vdj_t* v;
@@ -793,6 +815,7 @@ static void
 vdj_handle_managed_discovery_datagram(vdj_t* v, vdj_discovery_handler discovery_handler, unsigned char* packet, ssize_t len)
 {
     int i;
+    vdj_link_member_t* m;
     int type = cdj_packet_type(packet, len);
     cdj_discovery_packet_t* d_pkt;
 
@@ -818,8 +841,10 @@ vdj_handle_managed_discovery_datagram(vdj_t* v, vdj_discovery_handler discovery_
                 return;
             }
 
-            if ( ! vdj_get_link_member(v, d_pkt->player_id) ) {
-                vdj_new_link_member(v, d_pkt);
+            if ( ! (m = vdj_get_link_member(v, d_pkt->player_id)) ) {
+                m = vdj_new_link_member(v, d_pkt);
+                if ( m == NULL) return;
+                m->last_keepalive = time(NULL);
 
                 // optinally chain the handler so that client code can also react to managed link members
                 if (discovery_handler) discovery_handler(v, packet, len);
@@ -990,9 +1015,16 @@ vdj_handle_managed_update_datagram(vdj_t* v, vdj_update_handler update_handler, 
                 // update link master 
                 vdj_update_new_master(v, cdj_status_new_master(cs_pkt));
 
-                // optionally chain the handler so that client code can also react to client updates
-                if (update_handler) update_handler(v, packet, len);
+                m->last_keepalive = time(NULL);
+                m->known = 1;
             }
+            unsigned int sync_counter = cdj_status_sync_counter(cs_pkt);
+            if ( sync_counter > v->backline->sync_counter ) {
+                v->backline->sync_counter = sync_counter;
+            }
+
+            // optionally chain the handler so that client code can also react to client updates
+            if (update_handler) update_handler(v, packet, len);
             free(cs_pkt);
             break;
         }
