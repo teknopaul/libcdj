@@ -15,7 +15,7 @@ N.B for tools written in python head over to [python-prodj-link](https://github.
 - `libcdj` - common lib for handling messages and extracting data that is known from within the protocol  
   e.g. taking a beat packet and extracting the bpm.
 - `libvdj` - common lib to create virtual CDJs that partake in a ProLink network.  
-  This handle network connections, discovery, keep-alives and tracking link members in she  backline, i.e. all the known CDJs, VDJs and rekordbox instances on the network.
+  This handle network connections, discovery, keep-alives and tracking link members in the backline, i.e. all the known CDJs, VDJs and rekordbox instances on the network.
 
 - `vdj` - cli app that uses `libvdj`
 - `vdj-debug` - tool to dump ProLink messages
@@ -107,7 +107,10 @@ ProLink packets represent ip address and macs in a different manner to typical I
 
 ### libvdj
 
-`libvdj` uses `libcdj` to create a virtual cdj player in software.  There are two ways to utilize this library. You can either use the data structures and socket handling alone and process all message yourself by implementing message handlers.
+`libvdj` uses `libcdj` to create a virtual cdj player in software.  There are two ways to utilize this library. 
+1. You can either use the data structures and socket handling alone and process all messages yourself by implementing message handlers and calling the `sendto_*` methods.
+2. Use `libvdj`'s `managed_*` functions that handle CDJ messages for you.
+
 
 #### overview
 
@@ -133,7 +136,6 @@ N.B. you need to be player number 1 to 4 usually, unless you are just snooping o
     int vdj_broadcast(vdj_t* v, unsigned char* packet, int packet_length);
     int vdj_update(vdj_t* v, struct sockaddr_in* dest, unsigned char* packet, int packet_length);
 
-or you can use the "managed" functions that handle CDJ messages for you, for example you can either 
 
 
 To have `libvdj` manage sockets for you call either `vdj_open_sockets` which creates sockets for writing and reading the two broadcast ports and readin the unicast ports.

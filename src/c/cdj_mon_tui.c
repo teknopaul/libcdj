@@ -41,7 +41,8 @@ static char* fixed_length(char* string, int len);
 static void tui_init(int y);
 static void tui_exit();
 static void tui_text_at(char* string, int x, int y);
-static void tui_cdj_update(int pos, char* model_name, char* data);
+static void tui_cdj_init(int slot, char* model_name);
+static void tui_cdj_update(int pos, char* data);
 static int tui_get_width();
 static int tui_get_height();
 static void tui_delete_line();
@@ -51,15 +52,10 @@ static void tui_cursor_off();
 static void tui_cursor_on();
 
 
-/**
- *
- */
-static void tui_cdj_update(int slot, char* model_name, char* data)
+static void tui_cdj_init(int slot, char* model_name)
 {
     if (slot > tui_get_height()) return;
 
-    tui_set_cursor_pos(0, 0);
-    tui_delete_line();
     tui_set_cursor_pos(2, slot);
     tui_delete_line();
     putc('[', stdout);
@@ -67,6 +63,13 @@ static void tui_cdj_update(int slot, char* model_name, char* data)
     fputs(fixed_length(model_name, 20), stdout);
     fputs(TUI_NORMAL, stdout);
     putc(']', stdout);
+    fflush(stdout);
+}
+
+static void tui_cdj_update(int slot, char* data)
+{
+    if (slot > tui_get_height()) return;
+
     tui_text_at(data, 24, slot);
     fflush(stdout);
 }

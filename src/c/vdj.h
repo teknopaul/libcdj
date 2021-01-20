@@ -24,7 +24,9 @@
 typedef struct {
     unsigned char       player_id;     // id of the device
     struct sockaddr_in* mip_addr;      // ip address of the device for dm
-    float               bpm;           // calculated bpm
+    float               bpm;           // calculated bpm, based on bpm reported in a beat message (2 decimal places)
+    float               bpm_m;         // measured bpm, millisecond accuracy
+    float               bpm_m8;         // measured bpm, millisecond accuracy * 8
     time_t              last_keepalive;// last time we heard from this player, rekordbox disconnects after 7 seconds
     unsigned char       active;        // device thinks its active
     unsigned char       master_state;  // sync mater state

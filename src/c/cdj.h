@@ -16,7 +16,7 @@
 #define CDJ_ERROR           1
 
 #define CDJ_MAGIC_NUMBER        "Qspt1WmJOL"
-#define CDJ_DEVICE_NAME_LENGTH   0x14
+#define CDJ_DEVICE_MODEL_LENGTH  0x14
 #define CDJ_DEVICE_NUMBER_OFFSET 0x24
 #define CDJ_PACKET_LENGTH_OFFSET 0x23
 #define CDJ_PACKET_TYPE_OFFSET   0x0a
@@ -37,17 +37,18 @@
 /**
  * Keepalives should be broadcast with this frequency in millis to 50001
  */
-#define CDJ_KEEPALIVE_INTERVAL    1500
+#define CDJ_KEEPALIVE_INTERVAL    2000
 /**
  * Status should be sent unicast to all link members with this frequency
  */
 #define CDJ_STATUS_INTERVAL       200
 
 // The discovery channel, message types
-#define CDJ_PLAYER_NUM_DISCOVERY 0x00 // player_id and mac discovery (on 50000) LinkMember?
+#define CDJ_STAGE1_DISCOVERY     0x00 // mac discovery (on 50000) LinkMember?
 #define CDJ_STAGE2_DISCOVERY     0x02 // XDJ-1000 sends this on discovery as well as IP discovery
 #define CDJ_FINAL_DISCOVERY      0x04 // final stage discovery (on 50000)
 #define CDJ_KEEP_ALIVE           0x06 // 
+#define CDJ_ID_USE               0x08 // Player number clash
 #define CDJ_DISCOVERY            0x0a // also initial discovery (on 50000)
 
 #define CDJ_FADER_START_COMMAND  0x02
@@ -75,11 +76,6 @@
 #define CDJ_STAT_SLOT_SD        0x02
 #define CDJ_STAT_SLOT_USB       0x03
 #define CDJ_STAT_SLOT_RB        0x04 // rekordbox
-
-// CDJ devices types (observered knot known)
-#define CDJ_DEV_TYPE_DJM       2
-#define CDJ_DEV_TYPE_CDJ       1
-#define CDJ_DEV_TYPE_XDJ       2
 
 // cdj_status_master_state() flags  02 master but no beat grid
 #define CDJ_MASTER_STATE_ON     0x00
@@ -125,7 +121,6 @@ typedef struct {
     unsigned int   len;
     unsigned char  type;
     unsigned char  player_id;
-    unsigned char  device_type;
     unsigned char  mac[6];
     unsigned int   ip;
 } cdj_discovery_packet_t;
@@ -135,7 +130,6 @@ typedef struct {
     unsigned int   len;
     unsigned char  type;
     unsigned char  player_id;
-    unsigned char  device_type;
     unsigned char  bar_pos;
     float          bpm;
 } cdj_beat_packet_t;
@@ -145,7 +139,7 @@ typedef struct {
     unsigned int   len;
     unsigned char  type;
     unsigned char  player_id;
-    float          bpm;  // real BPM calcualted from base & pitch
+    float          bpm;
 } cdj_mixer_status_packet_t;
 
 typedef struct {
@@ -153,29 +147,26 @@ typedef struct {
     unsigned int   len;
     unsigned char  type;
     unsigned char  player_id;
-    float          bpm;  // real BPM calcualted from base & pitch
+    float          bpm;
 } cdj_cdj_status_packet_t;
 
 // Constructors
 
-
 // port = 50000
 cdj_discovery_packet_t*
-cdj_new_discovery_packet(unsigned char* packet, int length, int port);
+cdj_new_discovery_packet(unsigned char* packet, int length);
 
+// port = 50001
 cdj_beat_packet_t*
-cdj_new_beat_packet(unsigned char* packet, int length, int port);
+cdj_new_beat_packet(unsigned char* packet, int length);
 
+// port = 50002
 cdj_mixer_status_packet_t*
-cdj_new_mixer_status_packet(unsigned char* packet, int length, int port);
+cdj_new_mixer_status_packet(unsigned char* packet, int length);
 
+// port = 50002
 cdj_cdj_status_packet_t*
-cdj_new_cdj_status_packet(unsigned char* packet, int length, int port);
-
-
-
-void 
-cdj_print_packet(unsigned char* packet, int length, int port);
+cdj_new_cdj_status_packet(unsigned char* packet, int length);
 
 
 // Functions
@@ -184,6 +175,15 @@ cdj_print_packet(unsigned char* packet, int length, int port);
 
 // frame type
 const char* cdj_type_to_string(int port, unsigned char type);
+// print bpm tio 3 digits, two decimal places, ProLink protocol has no more precision
+char* cdj_bpm_to_string(float bpm);
+// return malloced emoji representation of CDJ state
+char* cdj_state_to_emoji(unsigned char flags);
+// returns malloced char representation of CDJ state
+char* cdj_state_to_chars(unsigned char flags);
+// returns malloced ANSI escape sequence representation of CDJ state
+char* cdj_state_to_term(unsigned char flags);
+
 double cdj_pitch_to_percentage(int pitch);
 double cdj_pitch_to_multiplier(int pitch);
 float cdj_calculated_bpm(unsigned int track_bpm, unsigned int pitch);
@@ -195,16 +195,22 @@ unsigned int cdj_ip_encode(struct sockaddr_in* ip_addr);
 int cdj_header_len(int port, unsigned char type);
 
 // Packet inspection functions
+
+// generic
+unsigned char cdj_packet_type(unsigned char* data, int len);
+int cdj_validate_header(unsigned char* data, int len, int port, int* packet_type);
+
+// allocs and returns cdj model .e.g "XDJ-1000"
 char* cdj_model_name(unsigned char* packet, int len, int port);
 
+// read data from discovery packets
 unsigned char cdj_discovery_player_id(cdj_discovery_packet_t* a_pkt);
-unsigned char cdj_discovery_device_type(cdj_discovery_packet_t* a_pkt);
 unsigned int cdj_discovery_ip(cdj_discovery_packet_t* a_pkt);
 // returns malloced data
 char* cdj_discovery_mac(cdj_discovery_packet_t* a_pkt);
 
 
-// status packets
+// read data from status packets
 unsigned char cdj_status_player_id(cdj_cdj_status_packet_t* cs_pkt);
 unsigned char cdj_status_active(cdj_cdj_status_packet_t* cs_pkt);
 unsigned char cdj_status_playing_from(cdj_cdj_status_packet_t* cs_pkt);
@@ -225,32 +231,31 @@ unsigned int cdj_status_pitch(cdj_cdj_status_packet_t* cs_pkt);
 float cdj_status_calculated_bpm(cdj_cdj_status_packet_t* cs_pkt);
 unsigned int cdj_status_counter(cdj_cdj_status_packet_t* cs_pkt);
 
-unsigned char cdj_packet_type(unsigned char* data, int len);
-int cdj_validate_header(unsigned char* data, int len, int port, int* packet_type);
 
-
-
-
-// beat packets
+// read data from beat packets
 unsigned int cdj_beat_bpm(cdj_beat_packet_t* cs_pkt);
 unsigned int cdj_beat_pitch(cdj_beat_packet_t* cs_pkt);
 float cdj_beat_calculated_bpm(cdj_beat_packet_t* b_pkt);
+double cdj_beat_measured_bpm(cdj_beat_packet_t* b_pkt);
 unsigned char cdj_beat_player_id(cdj_beat_packet_t* cs_pkt);
-unsigned char cdj_beat_device_type(cdj_beat_packet_t* b_pkt);
 unsigned char cdj_beat_bar_pos(cdj_beat_packet_t* b_pkt);
+
+
 // handshake
-unsigned char* cdj_create_initial_discovery_packet(int* length, unsigned char model, char device_type);
-unsigned char* cdj_create_stage1_discovery_packet(int* length, unsigned char model, char device_type, unsigned char *mac, unsigned char n);
-unsigned char* cdj_create_stage2_discovery_packet(int* length, unsigned char model, char device_type, unsigned char* ip, unsigned char* mac, unsigned char player_id, unsigned char n);
-unsigned char* cdj_create_final_discovery_packet(int* length, unsigned char model, char device_type, unsigned char player_id, unsigned char n);
-unsigned char* cdj_create_keepalive_packet(int* length, unsigned char model, char device_type, unsigned char* ip, unsigned char* mac, unsigned char player_id);
+unsigned char* cdj_create_initial_discovery_packet(int* length, unsigned char model);
+unsigned char* cdj_create_stage1_discovery_packet(int* length, unsigned char model, unsigned char *mac, unsigned char n);
+unsigned char* cdj_create_stage2_discovery_packet(int* length, unsigned char model, unsigned char* ip, unsigned char* mac, unsigned char player_id, unsigned char n);
+unsigned char* cdj_create_final_discovery_packet(int* length, unsigned char model, unsigned char player_id, unsigned char n);
+unsigned char* cdj_create_id_use_response_packet(int* length, unsigned char model, unsigned char player_id, unsigned char* ip);
+
+unsigned char* cdj_create_keepalive_packet(int* length, unsigned char model, unsigned char* ip, unsigned char* mac, unsigned char player_id);
 
 void           cdj_inc_stage1_discovery_packet(unsigned char* packet);
 void           cdj_inc_stage2_discovery_packet(unsigned char* packet);
 void           cdj_inc_final_discovery_packet(unsigned char* packet);
 
 
-unsigned char* cdj_create_beat_packet(int* length, unsigned char model, char device_type, unsigned char player_id, float bpm, unsigned char bar_pos);
+unsigned char* cdj_create_beat_packet(int* length, unsigned char model, unsigned char player_id, float bpm, unsigned char bar_pos);
 
 unsigned char* cdj_create_status_packet(int* length, unsigned char model, unsigned char player_id,
     float bpm, unsigned char bar_index, unsigned char active, unsigned char master, unsigned int sync_counter,
@@ -258,5 +263,10 @@ unsigned char* cdj_create_status_packet(int* length, unsigned char model, unsign
 
 unsigned char* cdj_create_master_request_packet(int* length, unsigned char model, unsigned char player_id);
 unsigned char* cdj_create_master_response_packet(int* length, unsigned char model, unsigned char player_id);
+
+
+
+
+void cdj_print_packet(unsigned char* packet, int length, int port);
 
 #endif /* _LIBCDJ_H_INCLUDED_ */

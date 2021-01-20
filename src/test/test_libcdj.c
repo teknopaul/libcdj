@@ -19,6 +19,14 @@ int main(int argc, const char *argv[])
     unsigned char active = 1;
     unsigned int sync_counter = 99;
 
+    printf("%s\n", cdj_state_to_emoji(CDJ_PLAY_STATE_PLAY | CDJ_PLAY_STATE_MASTER | CDJ_PLAY_STATE_SYNC | CDJ_PLAY_STATE_ONAIR));
+    printf("%s\n", cdj_state_to_chars(CDJ_PLAY_STATE_PLAY | CDJ_PLAY_STATE_MASTER | CDJ_PLAY_STATE_SYNC | CDJ_PLAY_STATE_ONAIR));
+    printf("%s\n", cdj_state_to_term(CDJ_PLAY_STATE_PLAY | CDJ_PLAY_STATE_MASTER | CDJ_PLAY_STATE_SYNC | CDJ_PLAY_STATE_ONAIR));
+    printf("%s\n", cdj_bpm_to_string(120.38));
+    printf("%s\n", cdj_bpm_to_string(120.3));
+    printf("%s\n", cdj_bpm_to_string(95.35));
+    printf("%s\n", cdj_bpm_to_string(1000.389));
+
 
     unsigned char mac[6] = { 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, };
     unsigned char player_id = 5;
@@ -74,31 +82,29 @@ int main(int argc, const char *argv[])
         exit(1);
     }
 
-
-    unsigned char device_type = 2;
     int len;
-    unsigned char* packet = cdj_create_initial_discovery_packet(&len, model, device_type);
+    unsigned char* packet = cdj_create_initial_discovery_packet(&len, model);
     printf("len=%x initial ", len);
     cdj_print_packet(packet, len, 50000);
 
-    packet = cdj_create_stage1_discovery_packet(&len, model, device_type, mac, 1);
+    packet = cdj_create_stage1_discovery_packet(&len, model, mac, 1);
     printf("len=%x stage1 ", len);
     cdj_print_packet(packet, len, 50000);
 
-    packet = cdj_create_stage2_discovery_packet(&len, model, device_type, ip, mac, player_id, 0);
+    packet = cdj_create_stage2_discovery_packet(&len, model, ip, mac, player_id, 1);
     printf("len=%x stage2 ", len);
     cdj_print_packet(packet, len, 50000);
 
 
-    packet = cdj_create_final_discovery_packet(&len, model, device_type, player_id, 0);
+    packet = cdj_create_final_discovery_packet(&len, model, player_id, 1);
     printf("len=%x final stage ", len);
     cdj_print_packet(packet, len, 50000);
 
-    packet = cdj_create_keepalive_packet(&len, model, device_type, ip, mac, player_id);
+    packet = cdj_create_keepalive_packet(&len, model, ip, mac, player_id);
     printf("len=%x keepalive ", len);
     cdj_print_packet(packet, len, 50000);
 
-    packet = cdj_create_beat_packet(&len, model, device_type, player_id, 120.00, 3);
+    packet = cdj_create_beat_packet(&len, model, player_id, 120.00, 3);
     printf("len=%x beat ", len);
     cdj_print_packet(packet, len, 50001);
 
@@ -113,13 +119,13 @@ int main(int argc, const char *argv[])
     // BPM stuff
 
     float c_bpm = cdj_calculated_bpm(12000, 0x00000000);
-    printf("calcualted bpm = %f\n", c_bpm);
+    printf("calculated bpm = %f\n", c_bpm);
 
     c_bpm = cdj_calculated_bpm(12000, 0x00100000);
-    printf("calcualted bpm = %f\n", c_bpm);
+    printf("calculated bpm = %f\n", c_bpm);
 
     c_bpm = cdj_calculated_bpm(12000, 0x00200000);
-    printf("calcualted bpm = %f\n", c_bpm);
+    printf("calculated bpm = %f\n", c_bpm);
 
     fprintf(stderr,"ok\n");
     exit(0);

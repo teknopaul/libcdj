@@ -8,13 +8,16 @@
 #include "cdj.h"
 #include "vdj.h"
 
-// N.B. including .c TODO Makefile
+// N.B. including .c
 #include "cdj_mon_tui.c"
 
 /**
- * monitor app that shows the running devices on a network, lists only data available on the broadcast ports so this
- * can be run at the same time as sarting and stopping another local VCDJ.
- * If binding to port 50002 were added that would not be possible AFAIK.
+ * Monitor app that shows the running devices on a network, lists only data available on the broadcast ports so this
+ * can be run at the same time as sarting and stopping another local VDJ.
+ * If binding to port 50002 were added that would not be possible.
+ *
+ * This is an example of using only libvdj's socket and directly handlilng Pro Link messages.
+ * i.e. this is the lower level api.
  */
 
 static void handle_discovery_datagram(unsigned char* packet, ssize_t len);
@@ -35,15 +38,22 @@ static void usage()
     exit(0);
 }
 
+// posisitons on screen for discovered players, mixers and rekordbox instances
 unsigned char id_map[127];
 int next_slot = 1;
 
 static void
-update_ui(char* model_name, unsigned char player_id, unsigned char device_type, int state, float bpm)
+init_ui(unsigned char player_id, char* model_name)
+{
+    tui_cdj_init(id_map[player_id], model_name);
+}
+
+static void
+update_ui(unsigned char player_id, unsigned char beat, float bpm)
 {
     char data[2048];
-    snprintf(data, 2047, "id=%02i type=%i playing=%i bpm=%f", player_id, device_type, state, bpm);
-    tui_cdj_update(id_map[player_id], model_name, data);
+    snprintf(data, 2047, "[%02i] %c %06.2fbpm", player_id, beat, bpm);
+    tui_cdj_update(id_map[player_id], data);
 }
 
 /**
@@ -128,21 +138,26 @@ cdj_monitor_discoverys(void* arg)
 static void
 handle_discovery_datagram(unsigned char* packet, ssize_t len)
 {
-    cdj_discovery_packet_t* a_pkt;
+    cdj_discovery_packet_t* d_pkt;
+    char* model;
 
-    if (cdj_packet_type(packet, len) == CDJ_KEEP_ALIVE ) {
+    if ( cdj_packet_type(packet, len) == CDJ_KEEP_ALIVE ) {
 
-        a_pkt = cdj_new_discovery_packet(packet, len, CDJ_DISCOVERY_PORT);
-        if (a_pkt) {
-            int slot = id_map[a_pkt->player_id];
+        d_pkt = cdj_new_discovery_packet(packet, len);
+        if (d_pkt) {
+            int slot = id_map[d_pkt->player_id];
             if (!slot) {
-                id_map[a_pkt->player_id] = next_slot;
+                id_map[d_pkt->player_id] = next_slot;
                 slot = next_slot++;
-                update_ui(
-                    cdj_model_name(packet, len, CDJ_DISCOVERY_PORT),
-                    a_pkt->player_id, a_pkt->device_type, 0, 0.0);
+                model = cdj_model_name(packet, len, CDJ_DISCOVERY_PORT);
+                if (model) {
+                    init_ui(d_pkt->player_id, model);
+                    free(model);
+                }
             }
+            free(d_pkt);
         }
+
     }
 }
 
@@ -173,17 +188,16 @@ cdj_monitor_broadcasts(void* arg)
 static void
 handle_broadcast_datagram(unsigned char* packet, ssize_t len)
 {
-    // cdj_print_packet(packet, len, v);
+    if ( cdj_packet_type(packet, len) == CDJ_BEAT ) {
 
-    int type = cdj_packet_type(packet, len);
-    if (type == CDJ_BEAT) {
-        cdj_beat_packet_t* b_pkt = cdj_new_beat_packet(packet, len, CDJ_BROADCAST_PORT);
-        if (id_map[b_pkt->player_id]) {
-            update_ui(
-                cdj_model_name(packet, len, CDJ_BROADCAST_PORT),
-                b_pkt->player_id, b_pkt->device_type, 1, b_pkt->bpm
-                );
+        cdj_beat_packet_t* b_pkt = cdj_new_beat_packet(packet, len);
+        if (b_pkt && id_map[b_pkt->player_id]) {
+
+            update_ui(b_pkt->player_id, b_pkt->bar_pos, b_pkt->bpm);
+
         }
+        free(b_pkt);
+
     }
 }
 

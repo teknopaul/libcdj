@@ -108,19 +108,12 @@ vdj_init(unsigned char* mac, char* ip_address, struct sockaddr_in* ip_addr, stru
             v->player_id = 5;
         }
 
-        if (flags & VDJ_FLAG_DEV_DJM) {
-            v->device_type = CDJ_DEV_TYPE_DJM;
-            // todo lots of other differentes
-        }
-
         if (flags & VDJ_FLAG_DEV_XDJ) {
             v->model = CDJ_XDJ;
-            v->device_type = CDJ_DEV_TYPE_XDJ;
         }
 
         if (flags & VDJ_FLAG_DEV_CDJ) {
             v->model = CDJ_CDJ;
-            v->device_type = CDJ_DEV_TYPE_CDJ;
         }
 
         v->status_counter = 1;
@@ -206,7 +199,7 @@ vdj_exec_discovery(vdj_t* v)
     // TODO too much protocol knowledge in this method
     int res, length;
 
-    unsigned char* packet = cdj_create_initial_discovery_packet(&length, v->model, v->device_type);
+    unsigned char* packet = cdj_create_initial_discovery_packet(&length, v->model);
     if (packet == NULL) return CDJ_ERROR;
 
     res = vdj_sendto_discovery(v, packet, length);
@@ -220,7 +213,7 @@ vdj_exec_discovery(vdj_t* v)
     usleep(300000);
     free(packet);
 
-    packet = cdj_create_stage1_discovery_packet(&length, v->model, v->device_type, v->mac, 0);
+    packet = cdj_create_stage1_discovery_packet(&length, v->model, v->mac, 1);
     if (packet == NULL) return CDJ_ERROR;
     
     vdj_sendto_discovery(v, packet, length);
@@ -233,21 +226,28 @@ vdj_exec_discovery(vdj_t* v)
     usleep(300000);
     free(packet);
 
-/* 2nd stage not sent by CDJ only by mixer
-    packet = cdj_create_stage2_discovery_packet(&length, v->model, v->device_type, v->ip, v->mac, v->player_id, 0);
+    packet = cdj_create_stage2_discovery_packet(&length, v->model, v->ip, v->mac, v->player_id, 1);
     if (packet == NULL) return CDJ_ERROR;
-    vdj_discovery(v, packet, length);
+
+    vdj_sendto_discovery(v, packet, length);
     usleep(300000);
     cdj_inc_stage2_discovery_packet(packet);
-    vdj_discovery(v, packet, length);
+    vdj_sendto_discovery(v, packet, length);
     usleep(300000);
     cdj_inc_stage2_discovery_packet(packet);
-    vdj_discovery(v, packet, length);
-    //usleep(300000);
+    vdj_sendto_discovery(v, packet, length);
+    usleep(300000);
     free(packet);
-*/
-    packet = cdj_create_final_discovery_packet(&length, v->model, v->device_type, v->player_id, 1);
+
+    packet = cdj_create_final_discovery_packet(&length, v->model, v->player_id, 1);
     if (packet == NULL) return CDJ_ERROR;
+
+    vdj_sendto_discovery(v, packet, length);
+    usleep(300000);
+    cdj_inc_final_discovery_packet(packet);
+    vdj_sendto_discovery(v, packet, length);
+    usleep(300000);
+    cdj_inc_final_discovery_packet(packet);
     vdj_sendto_discovery(v, packet, length);
     usleep(300000);
 
@@ -260,7 +260,7 @@ void
 vdj_send_keepalive(vdj_t* v)
 {
     int length;
-    unsigned char* packet = cdj_create_keepalive_packet(&length, v->model, v->device_type, v->ip, v->mac, v->player_id);
+    unsigned char* packet = cdj_create_keepalive_packet(&length, v->model, v->ip, v->mac, v->player_id);
     if (packet) {
         vdj_sendto_discovery(v, packet, length);
         free(packet);
@@ -391,7 +391,7 @@ void
 vdj_broadcast_beat(vdj_t* v, unsigned char bar_pos)
 {
     int length;
-    unsigned char* packet = cdj_create_beat_packet(&length, v->model, v->device_type, v->player_id, v->bpm, bar_pos);
+    unsigned char* packet = cdj_create_beat_packet(&length, v->model, v->player_id, v->bpm, bar_pos);
     if (packet) {
         vdj_sendto_broadcast(v, packet, length);
         free(packet);
@@ -814,7 +814,6 @@ vdj_init_managed_discovery_thread(vdj_t* v, vdj_discovery_handler discovery_hand
 static void
 vdj_handle_managed_discovery_datagram(vdj_t* v, vdj_discovery_handler discovery_handler, unsigned char* packet, ssize_t len)
 {
-    int i;
     vdj_link_member_t* m;
     int type = cdj_packet_type(packet, len);
     cdj_discovery_packet_t* d_pkt;
@@ -822,21 +821,16 @@ vdj_handle_managed_discovery_datagram(vdj_t* v, vdj_discovery_handler discovery_
     switch (type)
     {
         
-        case CDJ_PLAYER_NUM_DISCOVERY : {
-
-            /* TODO handle newly plugged in CDJ, this is not really necessay since we can listen for keepalilves
-            a_pkt = cdj_new_discovery_packet(packet, len, CDJ_DISCOVERY_PORT);
-            printf("[%-20s] %s: device_type=%i, player_id=%i\n",
-                cdj_model_name(packet, len, CDJ_DISCOVERY_PORT),
-                cdj_type_to_string(CDJ_DISCOVERY_PORT, type),
-                a_pkt->device_type, a_pkt->player_id);
-            */
+        case CDJ_STAGE1_DISCOVERY:  // TODO we should probably argue if someone wants out player_id
+        case CDJ_STAGE2_DISCOVERY:
+        case CDJ_FINAL_DISCOVERY:
+        case CDJ_DISCOVERY: {
             break;
         }
 
         case CDJ_KEEP_ALIVE : {
 
-            d_pkt = cdj_new_discovery_packet(packet, len, CDJ_DISCOVERY_PORT);
+            d_pkt = cdj_new_discovery_packet(packet, len);
             if (!d_pkt) {
                 return;
             }
@@ -850,16 +844,6 @@ vdj_handle_managed_discovery_datagram(vdj_t* v, vdj_discovery_handler discovery_
                 if (discovery_handler) discovery_handler(v, packet, len);
             }
             free(d_pkt);
-            break;
-        }
-
-        case CDJ_FADER_START_COMMAND : {
-            if (v->backline && len > 0x28) {
-                for (i = 0; i < CDJ_MAX_DJM_CHANNELS; i++) { // TODO looks like it might go up to 8 to me
-                    if (v->backline->link_members[i + 1]) v->backline->link_members[i + 1]->onair = packet[0x24 + i];
-                }
-                if (discovery_handler) discovery_handler(v, packet, len);
-            }
             break;
         }
     }
@@ -1006,7 +990,7 @@ vdj_handle_managed_update_datagram(vdj_t* v, vdj_update_handler update_handler, 
 
         case CDJ_STATUS : {
 
-            cs_pkt = cdj_new_cdj_status_packet(packet, len, CDJ_UPDATE_PORT);
+            cs_pkt = cdj_new_cdj_status_packet(packet, len);
             if (!cs_pkt) {
                 return;
             }

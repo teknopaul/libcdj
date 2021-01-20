@@ -15,7 +15,6 @@ static void vdj_usage()
     printf("    -p - player id (use one that no CDJ is currently displaying)\n");
     printf("    -c - mimic CDJ-1000\n");
     printf("    -x - mimic XDJ-1000\n");
-    printf("    -m - mimic DJM\n");
     printf("    -b - bpm, if set vdj broadcasts beat info\n");
     printf("    -M - start as master\n");
     printf("    -h - display this text\n");
@@ -24,7 +23,7 @@ static void vdj_usage()
 
 static void vdj_main_discovery_handler(vdj_t* v, unsigned char* packet, int len)
 {
-    cdj_discovery_packet_t* d_pkt = cdj_new_discovery_packet(packet, len, CDJ_DISCOVERY_PORT); // TODO redundant info
+    cdj_discovery_packet_t* d_pkt = cdj_new_discovery_packet(packet, len);
     if ( d_pkt &&
         d_pkt->player_id &&
         v->backline->link_members[d_pkt->player_id]
@@ -34,14 +33,16 @@ static void vdj_main_discovery_handler(vdj_t* v, unsigned char* packet, int len)
         if (mip_addr) {
             char ip_s[INET_ADDRSTRLEN];
             inet_ntop(AF_INET, &mip_addr->sin_addr.s_addr, ip_s, INET_ADDRSTRLEN);
-            printf("link member: %02i %s\n", d_pkt->player_id, ip_s); // TODO model name
+            char* model = cdj_model_name(packet, len, CDJ_DISCOVERY);
+            printf("link member: %02i [%s] %s\n", d_pkt->player_id, model, ip_s); // TODO model name
+            free(model);
         }
     }
 }
 
 static void vdj_main_update_handler(vdj_t* v, unsigned char* packet, int len)
 {
-    cdj_cdj_status_packet_t* cs_pkt = cdj_new_cdj_status_packet(packet, len, CDJ_DISCOVERY_PORT); // TODO redundant info
+    cdj_cdj_status_packet_t* cs_pkt = cdj_new_cdj_status_packet(packet, len);
     if ( cs_pkt &&
         cs_pkt->player_id &&
         v->backline->link_members[cs_pkt->player_id]
@@ -74,9 +75,6 @@ int main(int argc, char *argv[])
                 break;
             case 'b':
                 bpm = strtof(optarg, NULL);
-                break;
-            case 'm':
-                flags |= VDJ_FLAG_DEV_DJM;
                 break;
             case 'x':
                 flags |= VDJ_FLAG_DEV_XDJ;
@@ -120,6 +118,8 @@ int main(int argc, char *argv[])
         return 1;
     }
 
+    sleep(1);
+
     if ( vdj_init_keepalive_thread(v) != CDJ_OK ) {
         fprintf(stderr, "error: init keepalive thread\n");
         vdj_destroy(v);
@@ -133,9 +133,10 @@ int main(int argc, char *argv[])
         return 1;
     }
 
+    // TODO init these before the discovery
     sleep(2);
     if ( vdj_init_managed_update_thread(v, vdj_main_update_handler) != CDJ_OK ) {
-        fprintf(stderr, "error: init managed discovery thread\n");
+        fprintf(stderr, "error: init managed update thread\n");
         sleep(1);
         vdj_destroy(v);
         return 1;

@@ -84,10 +84,13 @@ clean:
 	rm -rf target/
 
 install:
-	cp libcdj.so /usr/lib64/
+	cp target/libcdj.so target/libvdj.so /usr/lib/x86_64-linux-gnu/
+	mkdir -p /usr/include/cdj
+	cp src/c/*.h  /usr/include/cdj
 
 uninstall:
-	rm -f /usr/lib64/libcdj.so
+	rm -f /usr/lib/x86_64-linux-gnu/libcdj.so /usr/lib/x86_64-linux-gnu/libvdj.so
+	rm -rf /usr/include/cdj
 
 deb:
 	sudo deploy/build-deb.sh
