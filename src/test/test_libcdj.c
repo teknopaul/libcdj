@@ -91,13 +91,12 @@ int main(int argc, const char *argv[])
     printf("len=%x stage1 ", len);
     cdj_print_packet(packet, len, 50000);
 
-    packet = cdj_create_stage2_discovery_packet(&len, model, ip, mac, player_id, 1);
-    printf("len=%x stage2 ", len);
+    packet = cdj_create_id_use_req_packet(&len, model, ip, mac, player_id, 1);
+    printf("len=%x id use req ", len);
     cdj_print_packet(packet, len, 50000);
 
-
-    packet = cdj_create_final_discovery_packet(&len, model, player_id, 1);
-    printf("len=%x final stage ", len);
+    packet = cdj_create_id_set_req_packet(&len, model, player_id, 1);
+    printf("len=%x id set req ", len);
     cdj_print_packet(packet, len, 50000);
 
     packet = cdj_create_keepalive_packet(&len, model, ip, mac, player_id);

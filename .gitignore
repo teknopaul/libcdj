@@ -1,3 +1,4 @@
 target/
 doc-internal/
-
+.sublime-project
+.sublime-project.sublime-workspace

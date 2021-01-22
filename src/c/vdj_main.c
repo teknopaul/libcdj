@@ -6,6 +6,7 @@
 #include "vdj.h"
 #include "vdj_net.h"
 #include "vdj_beat.h"
+#include "vdj_discovery.h"
 
 
 static void vdj_usage()
@@ -120,13 +121,7 @@ int main(int argc, char *argv[])
 
     sleep(1);
 
-    if ( vdj_init_keepalive_thread(v) != CDJ_OK ) {
-        fprintf(stderr, "error: init keepalive thread\n");
-        vdj_destroy(v);
-        return 1;
-    }
-
-    if ( vdj_init_managed_discovery_thread(v, vdj_main_discovery_handler) != CDJ_OK ) {
+    if ( vdj_init_keepalive_thread(v, vdj_main_discovery_handler) != CDJ_OK ) {
         fprintf(stderr, "error: init managed discovery thread\n");
         sleep(1);
         vdj_destroy(v);

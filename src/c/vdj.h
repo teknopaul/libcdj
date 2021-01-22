@@ -16,6 +16,7 @@
 #define VDJ_FLAG_DEV_DJM          0x08  // pretend to be an DJM device type 2
 #define VDJ_FLAG_DEV_XDJ          0x10  // pretend to be an XDJ
 #define VDJ_FLAG_DEV_CDJ          0x20  // pretend to be an XDJ
+#define VDJ_FLAG_AUTO_ID          0x40  // automatically assign an id
 
 // data structures
 
@@ -25,8 +26,6 @@ typedef struct {
     unsigned char       player_id;     // id of the device
     struct sockaddr_in* mip_addr;      // ip address of the device for dm
     float               bpm;           // calculated bpm, based on bpm reported in a beat message (2 decimal places)
-    float               bpm_m;         // measured bpm, millisecond accuracy
-    float               bpm_m8;         // measured bpm, millisecond accuracy * 8
     time_t              last_keepalive;// last time we heard from this player, rekordbox disconnects after 7 seconds
     unsigned char       active;        // device thinks its active
     unsigned char       master_state;  // sync mater state
@@ -57,16 +56,19 @@ typedef struct {
     unsigned char       ip[4];        // Stored in the format CDJs expect it, 4 bytes reading forward 192 168 2 1
     unsigned char       mac[6];       // Stored in the format CDJs expect it, 6 bytes reading forward.
 
-    int                 discovery_socket_fd; // 50000
-    int                 broadcast_socket_fd; // 50001
-    int                 update_socket_fd;    // 50002
-    int                 send_socket_fd;      // any port
+    int                 discovery_socket_fd;         // 50000
+    int                 discovery_unicast_socket_fd; // 50000
+    int                 broadcast_socket_fd;         // 50001
+    int                 update_socket_fd;            // 50002
+    int                 send_socket_fd;              // any port
 
     unsigned char       model;          // CDJ_VDJ CDJ_XDJ or CDJ_CDJ
     unsigned char       player_id;      // player id 1 to 4 for CDJs rekordbox is 17, we use 5 by default
     unsigned char       device_type;    // device type
-    unsigned char       active;         // device thinks its active, we chose this to also mena playing but there are other states
+    unsigned char       active;         // device thinks its active, we chose this to also mean playing but there are other states
     unsigned char       bar_pos;        // 0 index position in the bar
+    unsigned int        auto_id:1;      // automatically assign id
+    unsigned int        have_id:1;      // automatically assign id
 
     // state
     unsigned int        status_counter; // how many status packets have been sent
@@ -77,6 +79,10 @@ typedef struct {
 
 } vdj_t;
 
+typedef struct  {
+    vdj_t* v;
+    void* handler;
+} vdj_thread_info;
 
 
 // handlers
@@ -92,6 +98,9 @@ typedef void (*vdj_discovery_handler)(vdj_t* v, unsigned char* packet, int packe
 vdj_t* vdj_init_iface(char* interface, unsigned int flags);
 vdj_t* vdj_init(unsigned char* mac, char* ip_address, struct sockaddr_in* ip_addr, struct sockaddr_in* netmask, struct sockaddr_in *broadcast_addr, unsigned int flags);
 int vdj_destroy(vdj_t* v);
+
+void vdj_load_player_id(vdj_t* v);
+void vdj_save_player_id(vdj_t* v);
 
 int vdj_open_sockets(vdj_t* v);
 int vdj_open_broadcast_sockets(vdj_t* v);
@@ -109,10 +118,6 @@ int vdj_sendto_update(vdj_t* v, struct sockaddr_in* dest, unsigned char* packet,
 
 // internal threads
 
-// keepalive threads broadcasts keep alive packet on 50000
-int vdj_init_keepalive_thread(vdj_t* v);
-void vdj_stop_keepalive_thread(vdj_t* v);
-
 // reads discovery broadcasts
 int vdj_init_discovery_thread(vdj_t* v, vdj_discovery_handler discovery_handler);
 void vdj_stop_discovery_thread(vdj_t* v);
@@ -124,10 +129,6 @@ void vdj_stop_broadcast_thread(vdj_t* v);
 // read direct messages
 int vdj_init_update_thread(vdj_t* v, vdj_update_handler update_handler);
 void vdj_stop_update_thread(vdj_t* v);
-
-// reads discovery broadcasts and keeps track of link members in v->backline
-int vdj_init_managed_discovery_thread(vdj_t* v, vdj_discovery_handler discovery_handler);
-void vdj_stop_managed_discovery_thread(vdj_t* v);
 
 int vdj_init_status_thread(vdj_t* v);
 void vdj_stop_status_thread(vdj_t* v);
@@ -146,6 +147,6 @@ void vdj_broadcast_beat(vdj_t* v, unsigned char bar_pos);
 vdj_link_member_t* vdj_get_link_member(vdj_t* v, unsigned char player_id);
 vdj_link_member_t* vdj_new_link_member(vdj_t* v, cdj_discovery_packet_t* d_pkt);
 struct sockaddr_in* vdj_alloc_dest_addr(vdj_link_member_t* m, int port);
-
+unsigned char vdj_link_member_count(vdj_t* v);
 
 #endif /* _VDJ_H_INCLUDED_ */

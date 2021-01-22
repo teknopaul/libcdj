@@ -26,7 +26,7 @@
 #define CDJ_MAGIC_HEADER_LENGTH   10
 
 
-// CDJs broadcast keepalives to this port
+// CDJs broadcast keepalives to this port, and unicast for auto id assigment
 #define CDJ_DISCOVERY_PORT    50000
 // CDJs broadcast beat timing info to this port also used unicast for tempo master handoff DMs
 #define CDJ_BROADCAST_PORT    50001
@@ -39,18 +39,24 @@
  */
 #define CDJ_KEEPALIVE_INTERVAL    2000
 /**
+ * How long to wait for erplys during discovery phase or id assignment
+ */
+#define CDJ_REPLAY_WAIT           300
+/**
  * Status should be sent unicast to all link members with this frequency
  */
 #define CDJ_STATUS_INTERVAL       200
 
 // The discovery channel, message types
-#define CDJ_STAGE1_DISCOVERY     0x00 // mac discovery (on 50000) LinkMember?
-#define CDJ_STAGE2_DISCOVERY     0x02 // XDJ-1000 sends this on discovery as well as IP discovery
-#define CDJ_FINAL_DISCOVERY      0x04 // final stage discovery (on 50000)
-#define CDJ_KEEP_ALIVE           0x06 // 
-#define CDJ_ID_USE               0x08 // Player number clash
+#define CDJ_STAGE1_DISCOVERY     0x00 // mac discovery (on 50000) LinkMember? TODO rename to just discovery? what the betting this mac_use and insignificant if hardware macs are used
+#define CDJ_ID_USE_REQ           0x02 // XDJ-1000 broadcasts this on discovery port
+#define CDJ_ID_USE_RESP          0x03 // XDJ-1000 unicasts this back if we try to use its player_id
+#define CDJ_ID_SET_REQ           0x04 // send to indicate we have set our player_id, XDJ-1000 will complain immediatly with CDJ_COLLISION
+#define CDJ_KEEP_ALIVE           0x06 // sent to clarify that we are still here
+#define CDJ_COLLISION            0x08 // Player number clash
 #define CDJ_DISCOVERY            0x0a // also initial discovery (on 50000)
 
+// The status /control channel
 #define CDJ_FADER_START_COMMAND  0x02
 #define CDJ_CHANNELS_ON_AIR      0x03
 #define CDJ_GOODBYE              0x04 // Disconnect?
@@ -244,16 +250,17 @@ unsigned char cdj_beat_bar_pos(cdj_beat_packet_t* b_pkt);
 // handshake
 unsigned char* cdj_create_initial_discovery_packet(int* length, unsigned char model);
 unsigned char* cdj_create_stage1_discovery_packet(int* length, unsigned char model, unsigned char *mac, unsigned char n);
-unsigned char* cdj_create_stage2_discovery_packet(int* length, unsigned char model, unsigned char* ip, unsigned char* mac, unsigned char player_id, unsigned char n);
-unsigned char* cdj_create_final_discovery_packet(int* length, unsigned char model, unsigned char player_id, unsigned char n);
-unsigned char* cdj_create_id_use_response_packet(int* length, unsigned char model, unsigned char player_id, unsigned char* ip);
+unsigned char* cdj_create_id_use_req_packet(int* length, unsigned char model, unsigned char* ip, unsigned char* mac, unsigned char player_id, unsigned char n);
+unsigned char* cdj_create_id_use_resp_packet(int* length, unsigned char model, unsigned char player_id, unsigned char* ip);
+unsigned char* cdj_create_id_set_req_packet(int* length, unsigned char model, unsigned char player_id, unsigned char n);
 
-unsigned char* cdj_create_keepalive_packet(int* length, unsigned char model, unsigned char* ip, unsigned char* mac, unsigned char player_id);
+unsigned char* cdj_create_keepalive_packet(int* length, unsigned char model, unsigned char* ip, unsigned char* mac, unsigned char player_id, unsigned char member_count);
+unsigned char* cdj_create_id_collision_packet(int* length, unsigned char model, unsigned char player_id, unsigned char* ip);
 
 void           cdj_inc_stage1_discovery_packet(unsigned char* packet);
-void           cdj_inc_stage2_discovery_packet(unsigned char* packet);
-void           cdj_inc_final_discovery_packet(unsigned char* packet);
-
+int            cdj_inc_id_use_req_packet(unsigned char* packet);
+void           cdj_mod_id_use_req_packet_player_id(unsigned char* packet, unsigned char player_id);
+int            cdj_inc_id_set_req_packet(unsigned char* packet);
 
 unsigned char* cdj_create_beat_packet(int* length, unsigned char model, unsigned char player_id, float bpm, unsigned char bar_pos);
 

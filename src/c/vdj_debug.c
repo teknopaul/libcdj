@@ -5,17 +5,19 @@
 #include <sys/socket.h>
 #include <sys/prctl.h>
 #include <arpa/inet.h>
+#include <pthread.h>
 
 #include "cdj.h"
 #include "vdj.h"
 #include "vdj_net.h"
+#include "vdj_discovery.h"
 
 static void handle_discovery_datagram(vdj_t* v, unsigned char* packet, ssize_t len);
 static void handle_update_datagram(unsigned char* packet, ssize_t len);
 static void handle_broadcast_datagram(unsigned char* packet, ssize_t len);
-static int vdj_debug_discoverys(vdj_t* v);
-static int vdj_debug_updates(vdj_t* v);
-static int vdj_debug_broadcasts(vdj_t* v);
+static void* vdj_debug_discoverys(void* v);
+static void* vdj_debug_updates(void* v);
+static void* vdj_debug_broadcasts(void* v);
 
 static void usage()
 {
@@ -28,7 +30,9 @@ static void usage()
     printf("    -c - mimic CDJ\n");
     printf("    -x - mimic XDJ\n");
     printf("    -p - specific player number (default is 5)\n");
-    printf("    -s - suppress sending discovery\n");
+    printf("    -a - auto assign player number\n");
+    printf("    -s - suppress discovery phase\n");
+    printf("    -S - suppress sending status updates\n");
     printf("    -K - suppress sending keepalives\n");
     printf("    -h - display this text\n");
     exit(0);
@@ -49,12 +53,13 @@ int main (int argc, char* argv[])
     unsigned char suppress_keepalive = 0;
     unsigned char suppress_status = 0;
     char* iface = NULL;
+    pthread_t thread_id;
 
     // we need to know which interface to use
     // likely to have wifi and LAN for CDJs at home
     // TODO likely not to have DHCPd in a club
     int c;
-    while ( ( c = getopt(argc, argv, "p:i:dkKShubmscx") ) != EOF) {
+    while ( ( c = getopt(argc, argv, "p:i:dubkKShmascx") ) != EOF) {
         switch (c) {
             case 'h':
                 usage();
@@ -62,11 +67,11 @@ int main (int argc, char* argv[])
             case 'd':
                 debug_discovery = 1;
                 break;
-            case 'b':
-                debug_broadcast = 1;
-                break;
             case 'u':
                 debug_update = 1;
+                break;
+            case 'b':
+                debug_broadcast = 1;
                 break;
             case 'k':
                 just_keepalives = 1;
@@ -90,6 +95,9 @@ int main (int argc, char* argv[])
                 player_id = atoi(optarg);
                 if (player_id < 0xf) flags |= player_id;
                 break;
+            case 'a':
+                flags |= VDJ_FLAG_AUTO_ID;
+                break;
             case 'i':
                 iface = optarg;
                 break;
@@ -111,13 +119,31 @@ int main (int argc, char* argv[])
         return 1;
     }
 
+    if (debug_update) {
+        pthread_create(&thread_id, NULL, vdj_debug_updates, v);
+    }
+
+    if (debug_broadcast) {
+        pthread_create(&thread_id, NULL, vdj_debug_broadcasts, v);
+    }
+
+    if (debug_discovery) {
+        pthread_create(&thread_id, NULL, vdj_debug_discoverys, v);
+    }
+
+    sleep(2);
+
+    printf("\nEXEC DISCOVERY INITIAL PLAYER ID: %i\n\n", v->player_id);
+
     if ( ! suppress_discovery && vdj_exec_discovery(v) != CDJ_OK) {
         fprintf(stderr, "error: discovery\n");
         vdj_destroy(v);
         return 1;
     }
 
-    if ( ! suppress_keepalive && vdj_init_keepalive_thread(v) != CDJ_OK ) {
+    printf("\nFINISHED DISCOVERY FINAL PLAYER ID: %i\n\n", v->player_id);
+
+    if ( ! suppress_keepalive && vdj_init_keepalive_thread(v, NULL) != CDJ_OK ) {
         fprintf(stderr, "error: init keepalive thread\n");
         vdj_destroy(v);
         return 1;
@@ -129,19 +155,8 @@ int main (int argc, char* argv[])
         return 1;
     }
 
-    if (debug_update) {
-        vdj_debug_updates(v);
-    }
-
-    else if (debug_broadcast) {
-        vdj_debug_broadcasts(v);
-    }
-
-    else if (debug_discovery) {
-        vdj_debug_discoverys(v);
-    }
-
-    else if (just_keepalives) {
+    if (debug_discovery | debug_update | debug_broadcast | just_keepalives) {
+        //printf("main() loop\n");
         while (1) sleep(1);
     }
 
@@ -156,20 +171,22 @@ int main (int argc, char* argv[])
 /**
  * Take a VirtualCDJ and dump info from other devices to stdout
  */
-static int
-vdj_debug_discoverys(vdj_t* v)
+static void*
+vdj_debug_discoverys(void* arg)
 {
     int socket;
     ssize_t len;
     unsigned char packet[1500];
+    vdj_t* v = arg;
 
     socket = v->discovery_socket_fd;
+    fprintf(stderr, "vdj_debug_discoverys\n");
 
     while (1) {
         len = recv(socket, packet, 1500, 0);
         if (len == -1) {
             fprintf(stderr, "socket read error: %s", strerror(errno));
-            return CDJ_ERROR;
+            return NULL;
         } else {
             handle_discovery_datagram(v, packet, len);
         }
@@ -188,7 +205,9 @@ handle_discovery_datagram(vdj_t* v, unsigned char* packet, ssize_t len)
         
         case CDJ_DISCOVERY:
         case CDJ_STAGE1_DISCOVERY:
-        //case CDJ_FINAL_DISCOVERY:
+        case CDJ_ID_USE_REQ:
+        case CDJ_ID_USE_RESP:
+        case CDJ_ID_SET_REQ:
         case CDJ_KEEP_ALIVE: {
 
             d_pkt = cdj_new_discovery_packet(packet, len);
@@ -214,88 +233,9 @@ handle_discovery_datagram(vdj_t* v, unsigned char* packet, ssize_t len)
             cdj_print_packet(packet, len, CDJ_DISCOVERY_PORT);
             break;
         }
-        case CDJ_STAGE2_DISCOVERY: {
 
-            d_pkt = cdj_new_discovery_packet(packet, len);
-            printf("%li [%-20s] %s: player_id=%i, ip=%i.%i.%i.%i\n",
-                time(NULL),
-                model = cdj_model_name(packet, len, CDJ_DISCOVERY_PORT),
-                cdj_type_to_string(CDJ_DISCOVERY_PORT, type),
-                d_pkt->player_id,
-                (unsigned char) (d_pkt->ip >> 24),
-                (unsigned char) (d_pkt->ip >> 16),
-                (unsigned char) (d_pkt->ip >> 8),
-                (unsigned char) d_pkt->ip
-                );
-            cdj_print_packet(packet, len, CDJ_DISCOVERY_PORT);
-
-            // does not help  but here is where nwe need to DM the plaer with a solution
-            if (d_pkt->player_id == v->player_id && v->ip[3] != (unsigned char) d_pkt->ip ) {
-                printf("ID CLASH!! SENDING: IDUSE\n");
-                int length;
-                unsigned char* packet = cdj_create_id_use_response_packet(&length, 'C', v->player_id, v->ip);
-                struct sockaddr_in* dest = cdj_ip_decode(d_pkt->ip);
-                dest->sin_port = htons(CDJ_UPDATE_PORT);
-                vdj_sendto_update(v, dest, packet, length);
-                //vdj_send_keepalive(v);
-            }
-            
-
-
-
-            free(model);
-            free(d_pkt);
-            break;
-
-        }
-        case CDJ_FINAL_DISCOVERY:{
-
-            d_pkt = cdj_new_discovery_packet(packet, len);
-            printf("%li [%-20s] %s: player_id=%i, ip=%i.%i.%i.%i\n",
-                time(NULL),
-                model = cdj_model_name(packet, len, CDJ_DISCOVERY_PORT),
-                cdj_type_to_string(CDJ_DISCOVERY_PORT, type),
-                d_pkt->player_id,
-                (unsigned char) (d_pkt->ip >> 24),
-                (unsigned char) (d_pkt->ip >> 16),
-                (unsigned char) (d_pkt->ip >> 8),
-                (unsigned char) d_pkt->ip
-                );
-            cdj_print_packet(packet, len, CDJ_DISCOVERY_PORT);
-            /*
-            if (d_pkt->player_id == v->player_id && v->ip[3] != (unsigned char) d_pkt->ip ) {
-                int length;
-                unsigned char* packet = cdj_create_id_use_response_packet(&length, 'C', v->player_id, v->ip);
-                vdj_sendto_discovery(v, packet, length);
-                free(packet);
-                printf("SENDING: ID_USE PACKET\n");
-            }
-            */
-            
-            free(model);
-            free(d_pkt);
-            break;
-        }
-        case CDJ_ID_USE: {
-            d_pkt = cdj_new_discovery_packet(packet, len);
-            printf("%li [%-20s] %s: player_id=%i, ip=%i.%i.%i.%i\n",
-                time(NULL),
-                model = cdj_model_name(packet, len, CDJ_DISCOVERY_PORT),
-                cdj_type_to_string(CDJ_DISCOVERY_PORT, type),
-                d_pkt->player_id,
-                (unsigned char) (d_pkt->ip >> 24),
-                (unsigned char) (d_pkt->ip >> 16),
-                (unsigned char) (d_pkt->ip >> 8),
-                (unsigned char) d_pkt->ip
-                );
-            cdj_print_packet(packet, len, CDJ_DISCOVERY_PORT);
-            free(model);
-            free(d_pkt);
-            break;
-        }
-        
         default : {
-            printf("%li [%-20s] type=%02i:\n",
+            printf("%li [%-20s] NEW PACKET TYPE=%02i:\n",
                 time(NULL),
                 model = cdj_model_name(packet, len, CDJ_DISCOVERY_PORT),
                 type);
@@ -308,20 +248,22 @@ handle_discovery_datagram(vdj_t* v, unsigned char* packet, ssize_t len)
 
 
 
-static int
-vdj_debug_broadcasts(vdj_t* v)
+static void*
+vdj_debug_broadcasts(void* arg)
 {
     int socket;
     ssize_t len;
     unsigned char packet[1500];
+    vdj_t* v = arg;
 
     socket = v->broadcast_socket_fd;
+    fprintf(stderr, "vdj_debug_broadcasts\n");
 
     while (1) {
         len = recv(socket, packet, 1500, 0);
         if (len == -1) {
             fprintf(stderr, "socket read error: %s", strerror(errno));
-            return CDJ_ERROR;
+            return NULL;
         } else {
             handle_broadcast_datagram(packet, len);
         }
@@ -352,20 +294,22 @@ handle_broadcast_datagram(unsigned char* packet, ssize_t len)
 /**
  * Take a VirtualCDJ and dump info from other devices to stdout
  */
-static int
-vdj_debug_updates(vdj_t* v)
+static void*
+vdj_debug_updates(void* arg)
 {
     int socket;
     ssize_t len;
     unsigned char packet[1500];
+    vdj_t* v = arg;
 
     socket = v->update_socket_fd;
+    fprintf(stderr, "vdj_debug_updates\n");
 
     while (1) {
         len = recv(socket, packet, 1500, 0);
         if (len == -1) {
             fprintf(stderr, "socket read error: %s", strerror(errno));
-            return CDJ_ERROR;
+            return NULL;
         } else {
             handle_update_datagram(packet, len);
         }
