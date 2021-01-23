@@ -12,9 +12,9 @@
 #include "vdj_net.h"
 #include "vdj_discovery.h"
 
-static void handle_discovery_datagram(vdj_t* v, unsigned char* packet, ssize_t len);
-static void handle_update_datagram(unsigned char* packet, ssize_t len);
-static void handle_broadcast_datagram(unsigned char* packet, ssize_t len);
+static void handle_discovery_datagram(vdj_t* v, unsigned char* packet, uint16_t len);
+static void handle_update_datagram(unsigned char* packet, uint16_t len);
+static void handle_broadcast_datagram(unsigned char* packet, uint16_t len);
 static void* vdj_debug_discoverys(void* v);
 static void* vdj_debug_updates(void* v);
 static void* vdj_debug_broadcasts(void* v);
@@ -43,7 +43,7 @@ static void usage()
  */
 int main (int argc, char* argv[])
 {
-    unsigned int flags = 0;
+    uint32_t flags = 0;
     unsigned char player_id;
     unsigned char debug_discovery = 0;
     unsigned char debug_update = 0;
@@ -133,7 +133,7 @@ int main (int argc, char* argv[])
 
     sleep(2);
 
-    printf("\nEXEC DISCOVERY INITIAL PLAYER ID: %i\n\n", v->player_id);
+    //printf("\nEXEC DISCOVERY INITIAL PLAYER ID: %i\n\n", v->player_id);
 
     if ( ! suppress_discovery && vdj_exec_discovery(v) != CDJ_OK) {
         fprintf(stderr, "error: discovery\n");
@@ -141,7 +141,7 @@ int main (int argc, char* argv[])
         return 1;
     }
 
-    printf("\nFINISHED DISCOVERY FINAL PLAYER ID: %i\n\n", v->player_id);
+    //printf("\nFINISHED DISCOVERY FINAL PLAYER ID: %i\n\n", v->player_id);
 
     if ( ! suppress_keepalive && vdj_init_keepalive_thread(v, NULL) != CDJ_OK ) {
         fprintf(stderr, "error: init keepalive thread\n");
@@ -194,10 +194,11 @@ vdj_debug_discoverys(void* arg)
 }
 
 static void
-handle_discovery_datagram(vdj_t* v, unsigned char* packet, ssize_t len)
+handle_discovery_datagram(vdj_t* v, unsigned char* packet, uint16_t len)
 {
     char* model;
-    int type = cdj_packet_type(packet, len);
+    unsigned char type = cdj_packet_type(packet, len);
+    unsigned char sub_type;
     cdj_discovery_packet_t* d_pkt;
 
     switch (type)
@@ -212,10 +213,12 @@ handle_discovery_datagram(vdj_t* v, unsigned char* packet, ssize_t len)
 
             d_pkt = cdj_new_discovery_packet(packet, len);
 
+            sub_type = cdj_discovery_sub_type(d_pkt);
+
             printf("%li [%-20s] %s: player_id=%i, ip=%i.%i.%i.%i, mac=%02x:%02x:%02x:%02x:%02x:%02x\n",
                 time(NULL),
                 model = cdj_model_name(packet, len, CDJ_DISCOVERY_PORT),
-                cdj_type_to_string(CDJ_DISCOVERY_PORT, type),
+                cdj_type_to_string(CDJ_DISCOVERY_PORT, type, sub_type),
                 d_pkt->player_id, 
                 (unsigned char) (d_pkt->ip >> 24),
                 (unsigned char) (d_pkt->ip >> 16),
@@ -271,15 +274,15 @@ vdj_debug_broadcasts(void* arg)
 }
 
 static void
-handle_broadcast_datagram(unsigned char* packet, ssize_t len)
+handle_broadcast_datagram(unsigned char* packet, uint16_t len)
 {
     char* model;
 
-    int type = cdj_packet_type(packet, len);
+    uint16_t type = cdj_packet_type(packet, len);
     if (type == CDJ_BEAT) {
         cdj_beat_packet_t* b_pkt = cdj_new_beat_packet(packet, len);
         printf("%s: %-10s [%i] beat=%i, %06.2fbpm\n", 
-            cdj_type_to_string(CDJ_BROADCAST_PORT, type),
+            cdj_type_to_string(CDJ_BROADCAST_PORT, type, 0),
             model = cdj_model_name(packet, len, CDJ_BROADCAST_PORT),
             b_pkt->player_id, 
             b_pkt->bar_pos, b_pkt->bpm);
@@ -287,7 +290,7 @@ handle_broadcast_datagram(unsigned char* packet, ssize_t len)
         free(b_pkt);
     }
 
-    //cdj_print_packet(packet, len, CDJ_BROADCAST_PORT);
+    cdj_print_packet(packet, len, CDJ_BROADCAST_PORT);
 }
 
 
@@ -317,21 +320,21 @@ vdj_debug_updates(void* arg)
 }
 
 static void
-handle_update_datagram(unsigned char* packet, ssize_t len)
+handle_update_datagram(unsigned char* packet, uint16_t len)
 {
     char* model;
-    int type = cdj_packet_type(packet, len);
+    unsigned char type = cdj_packet_type(packet, len);
 
     switch (type)
     {
         case CDJ_STATUS : {
             cdj_cdj_status_packet_t* cs_pkt = cdj_new_cdj_status_packet(packet, len);
             printf("%s: %-10s [%02i] %06.2fbpm state=%s time=%li\n",
-                cdj_type_to_string(CDJ_UPDATE_PORT, type),
+                cdj_type_to_string(CDJ_UPDATE_PORT, type, 0),
                 model = cdj_model_name(packet, len, CDJ_UPDATE_PORT),
                 cs_pkt->player_id, 
                 cs_pkt->bpm,
-                cdj_state_to_chars(cdj_status_sync_flags(cs_pkt)),
+                cdj_flags_to_chars(cs_pkt->flags),
                 time(NULL)
                 );
             free(model);

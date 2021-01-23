@@ -33,10 +33,11 @@ static void vdj_handle_discovery_datagram(vdj_t* v, unsigned char* packet, ssize
  * if not this message is worng or delivered late from a previous attempt and should be ignored
  */
 static int
-vdj_is_id_in_use_resp(vdj_t* v, unsigned char n, unsigned char* packet, int len)
+vdj_is_id_in_use_resp(vdj_t* v, unsigned char n, unsigned char* packet, uint16_t len)
 {
     // TODO move to libcdj
     return CDJ_ID_USE_RESP == cdj_packet_type(packet, len) &&
+        packet[0x0b] == 0x00 &&
         packet[0x24] == v->player_id &&
         packet[0x25] == n;
 }
@@ -49,14 +50,15 @@ static void
 vdj_check_for_id_reuse(vdj_t* v, unsigned char n)
 {
     unsigned char packet[1500];
+    ssize_t len;
 
     if (v->auto_id) {
-        int len = recv(v->discovery_unicast_socket_fd, packet, 1500, 0);
-        if (len > 0 && vdj_is_id_in_use_resp(v, n, packet, len)) {
+        len = recv(v->discovery_unicast_socket_fd, packet, 1500, 0);
+        if (len > 0 && ! cdj_validate_header(packet, len) && vdj_is_id_in_use_resp(v, n, packet, len)) {
             fprintf(stderr, "recv() CDJ_ID_USE_RESP, player_id was %i\n", v->player_id);
             v->player_id++;
             if (v->player_id > 4) v->player_id = 1;
-            cdj_print_packet(packet, len, CDJ_DISCOVERY_PORT);
+            //cdj_print_packet(packet, len, CDJ_DISCOVERY_PORT);
         } 
         // todo report error?  we expect errno to be EAGAIN or maybe EWOULDBLOCK and dont really care, not much we can do about errors
     } else {
@@ -93,7 +95,9 @@ vdj_set_discovery_socket_timouts(vdj_t* v)
 int
 vdj_exec_discovery(vdj_t* v)
 {
-    int res, length, n;
+    uint16_t length;
+    int rv;
+    unsigned char n;
 
     if ( vdj_set_discovery_socket_timouts(v) ) {
         return CDJ_ERROR;
@@ -106,8 +110,8 @@ vdj_exec_discovery(vdj_t* v)
     unsigned char* packet = cdj_create_initial_discovery_packet(&length, v->model);
     if (packet == NULL) return CDJ_ERROR;
 
-    res = vdj_sendto_discovery(v, packet, length);
-    if (res != CDJ_OK) {
+    rv = vdj_sendto_discovery(v, packet, length);
+    if (rv != CDJ_OK) {
         return CDJ_ERROR;
     }
     usleep(300000);
@@ -199,8 +203,10 @@ vdj_keepalive_loop(void* arg)
                 fprintf(stderr, "error: socket read '%s'", strerror(errno));
                 return NULL;
             } else if (len > 0) {
-                vdj_handle_discovery_datagram(v, packet, len);
-                if (discovery_handler) discovery_handler(tinfo->v, packet, len);
+                if ( ! cdj_validate_header(packet, len) )  {
+                    vdj_handle_discovery_datagram(v, packet, len);
+                    if (discovery_handler) discovery_handler(tinfo->v, packet, len);
+                }
             }
         } while (len > 0);
 
@@ -271,15 +277,15 @@ vdj_match_ip(vdj_t* v, unsigned int ip)
 static void
 vdj_handle_discovery_datagram(vdj_t* v, unsigned char* packet, ssize_t len)
 {
-    int length;
+    uint16_t length;
     unsigned char* resp;
     struct sockaddr_in* dest;
     vdj_link_member_t* m;
     cdj_discovery_packet_t* d_pkt;
 
-    int type = cdj_packet_type(packet, len);
+    unsigned char type = cdj_packet_type(packet, len);
 
-cdj_print_packet(packet, len, CDJ_DISCOVERY_PORT);
+//cdj_print_packet(packet, len, CDJ_DISCOVERY_PORT);
 
     switch (type)
     {

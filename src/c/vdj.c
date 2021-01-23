@@ -35,6 +35,7 @@
 #include "cdj.h"
 #include "vdj.h"
 #include "vdj_net.h"
+#include "vdj_store.h"
 #include "vdj_beat.h"
 #include "vdj_master.h"
 #include "vdj_discovery.h"
@@ -63,7 +64,23 @@ static int vdj_get_network_details(char* iface, unsigned char** local_mac, char*
 
 static void* vdj_discovery_loop(void* arg);
 
-static void vdj_handle_managed_update_datagram(vdj_t* v, vdj_update_handler update_handler, unsigned char* packet, ssize_t len);
+static void vdj_handle_managed_update_datagram(vdj_t* v, vdj_update_handler update_handler, unsigned char* packet, uint16_t len);
+
+/**
+ * Initialise Virtual CDJ, this tries to guess the NIC by looking for one that is a physical device, not wireless, and not the loopback interface.
+ *
+ * If you have multiple NICs it gives up and you must provide one.
+ * 
+ * @param flags - see headers
+ * 
+ * @return mallocd space or NULL;
+ */
+vdj_t*
+vdj_init(uint32_t flags)
+{
+    return vdj_init_iface(NULL, flags);
+}
+
 /**
  * Initialise Virtual CDJ.
  * 
@@ -72,9 +89,8 @@ static void vdj_handle_managed_update_datagram(vdj_t* v, vdj_update_handler upda
  * 
  * @return mallocd space or NULL;
  */
-
 vdj_t*
-vdj_init_iface(char* iface, unsigned int flags)
+vdj_init_iface(char* iface, uint32_t flags)
 {
     unsigned char* mac;
     char* ip_address;
@@ -83,15 +99,16 @@ vdj_init_iface(char* iface, unsigned int flags)
     struct sockaddr_in* broadcast_addr;
     if (vdj_get_network_details(iface, &mac, &ip_address, &ip_addr, &netmask, &broadcast_addr) == CDJ_OK) {
         ip_addr->sin_family = AF_INET;
-        return vdj_init(mac, ip_address, ip_addr, netmask, broadcast_addr, flags);
+        return vdj_init_net(mac, ip_address, ip_addr, netmask, broadcast_addr, flags);
     }
     return NULL;
 }
 
 // This is public so you can start with a specific IP on an interface with two IPs
 vdj_t*
-vdj_init(unsigned char* mac, char* ip_address, struct sockaddr_in* ip_addr, struct sockaddr_in* netmask, struct sockaddr_in *broadcast_addr, unsigned int flags)
+vdj_init_net(unsigned char* mac, char* ip_address, struct sockaddr_in* ip_addr, struct sockaddr_in* netmask, struct sockaddr_in *broadcast_addr, uint32_t flags)
 {
+    char mac_s[18];
     vdj_t* v = (vdj_t*) calloc(1, sizeof(vdj_t));
     if (v != NULL) {
         // Setup the vdj_t struct
@@ -126,6 +143,10 @@ vdj_init(unsigned char* mac, char* ip_address, struct sockaddr_in* ip_addr, stru
             v->player_id = 1;
         }
 
+        if (flags & VDJ_FLAG_PRINT_IP) {
+            vdj_mac_addr_to_string(mac, mac_s);
+            printf("vdj: %s/%s\n", ip_address, mac_s);
+        }
         v->status_counter = 1;
 
         v->backline = (vdj_backline_t*) calloc(1, sizeof(vdj_backline_t));
@@ -203,43 +224,15 @@ vdj_close_sockets(vdj_t* v)
         vdj_close_send_socket(v);
 }
 
-void
-vdj_save_player_id(vdj_t* v)
-{
-    if (v->auto_id) {
-        FILE* p;
-        if ( (p = fopen("/var/tmp/vdj-player-id", "w")) ) {
-            fprintf(p, "%i\n", v->player_id);
-            fflush(p);
-            fclose(p);
-        }
-    }
-}
-
-void
-vdj_load_player_id(vdj_t* v)
-{
-    if (v->auto_id) {
-        // read last used player_id from /var/tmp/vdj-player-id
-        FILE* p;
-        if ( (p = fopen("/var/tmp/vdj-player-id", "r")) ) {
-            char str[4];
-            if ( fgets(str, 3, p) ) {
-                int pid = atoi(str);
-                if (pid > 0 && pid < 5) v->player_id = pid;
-            }
-            fclose(p);
-        }
-    }
-}
 
 /**
- * manuallyl trigger a keep alive message, N.B> backline needs to be updated for the link memmber count filed to be correct
+ * manually trigger a keep alive message, N.B. backline needs to be updated for the link memmber count filed to be correct
  */
 void
 vdj_send_keepalive(vdj_t* v)
 {
-    int length;
+    uint16_t length;
+    // TODO XDJ does not base link member count on keepalives
     unsigned char* packet = cdj_create_keepalive_packet(&length, v->model, v->ip, v->mac, v->player_id, 1 + vdj_link_member_count(v));
     if (packet) {
         vdj_sendto_discovery(v, packet, length);
@@ -251,7 +244,8 @@ vdj_send_keepalive(vdj_t* v)
 int
 vdj_send_status(vdj_t* v)
 {
-    int length, i, rv = CDJ_OK;
+    uint16_t length;
+    int i, rv = CDJ_OK;
     vdj_link_member_t* m;
     struct sockaddr_in* dest;
 
@@ -272,7 +266,7 @@ vdj_send_status(vdj_t* v)
             }
         }
 
-        cdj_print_packet(packet, length, CDJ_UPDATE_PORT);
+        //cdj_print_packet(packet, length, CDJ_UPDATE_PORT);
     }
     return rv;
 }
@@ -322,7 +316,7 @@ vdj_stop_threads(vdj_t* v)
 void
 vdj_broadcast_beat(vdj_t* v, unsigned char bar_pos)
 {
-    int length;
+    uint16_t length;
     unsigned char* packet = cdj_create_beat_packet(&length, v->model, v->player_id, v->bpm, bar_pos);
     if (packet) {
         vdj_sendto_broadcast(v, packet, length);
@@ -341,7 +335,7 @@ vdj_print_sockaddr(char* context, struct sockaddr_in* ip)
 }
 
 struct sockaddr_in*
-vdj_alloc_dest_addr(vdj_link_member_t* m, int port)
+vdj_alloc_dest_addr(vdj_link_member_t* m, uint16_t port)
 {
     struct sockaddr_in* dest = calloc(1, sizeof(struct sockaddr_in));
     dest->sin_family = AF_INET;
@@ -357,7 +351,6 @@ vdj_get_network_details(char* iface, unsigned char** out_mac, char** out_ip_addr
     char* ip_address;
     char netmask_s[INET6_ADDRSTRLEN];
     char broadcast_s[INET6_ADDRSTRLEN];
-    char mac_s[18];
     struct sockaddr_in* ip_addr;
     struct sockaddr_in* netmask;
     struct sockaddr_in* broadcast_addr;
@@ -373,6 +366,7 @@ vdj_get_network_details(char* iface, unsigned char** out_mac, char** out_ip_addr
         // not been told which interface to use
         if (vdj_has_single_ip() == CDJ_OK) {
             // init with single interface
+            iface = (char*) calloc(1, IFNAMSIZ + 1);
             err = vdj_get_single_ip(iface, ip_addr, netmask);
         } else {
             err = CDJ_ERROR; // TODO more explicit
@@ -402,12 +396,6 @@ vdj_get_network_details(char* iface, unsigned char** out_mac, char** out_ip_addr
     inet_ntop(AF_INET, &(broadcast_addr->sin_addr), broadcast_s, INET_ADDRSTRLEN);
 
     vdj_get_mac_addr(iface, mac);
-
-    // TODO remove
-
-    vdj_mac_addr_to_string(mac, mac_s);
-    printf("virtual cdj if: %s, mac: %s, ip: %s, netmask: %s, broadcast: %s\n", iface, mac_s, ip_address, netmask_s, broadcast_s);
-
 
     // return
     *out_mac = mac;
@@ -599,7 +587,7 @@ vdj_close_send_socket(vdj_t* v)
  * send a packet from discovery_socket_fd to broadcast:50000
  */
 int
-vdj_sendto_discovery(vdj_t* v, unsigned char* packet, int packet_length)
+vdj_sendto_discovery(vdj_t* v, unsigned char* packet, uint16_t packet_length)
 {
     int flags = 0;
     struct sockaddr_in dest;
@@ -625,7 +613,7 @@ vdj_sendto_discovery(vdj_t* v, unsigned char* packet, int packet_length)
  * used to send out beat timing
  */
 int
-vdj_sendto_broadcast(vdj_t* v, unsigned char* packet, int packet_length)
+vdj_sendto_broadcast(vdj_t* v, unsigned char* packet, uint16_t packet_length)
 {
     int flags = 0;
     struct sockaddr_in dest;
@@ -650,7 +638,7 @@ vdj_sendto_broadcast(vdj_t* v, unsigned char* packet, int packet_length)
  * send a packet from send_socket_fd to remote:50002 (or anywhere else)
  */
 int
-vdj_sendto_update(vdj_t* v, struct sockaddr_in* dest, unsigned char* packet, int packet_length)
+vdj_sendto_update(vdj_t* v, struct sockaddr_in* dest, unsigned char* packet, uint16_t packet_length)
 {
     int flags = 0;
     if (v->send_socket_fd == 0) {
@@ -686,7 +674,7 @@ vdj_discovery_loop(void* arg)
             fprintf(stderr, "error: socket read '%s'", strerror(errno));
             return NULL;
         } else {
-            discovery_handler(tinfo->v, packet, len);
+            if ( ! cdj_validate_header(packet, len)) discovery_handler(tinfo->v, packet, len);
         }
     }
 
@@ -722,13 +710,14 @@ broadcast_loop(void* arg)
     ssize_t len;
     unsigned char packet[1500];
 
+    vdj_broadcast_running = 1;
     while (vdj_broadcast_running) {
         len = recv(tinfo->v->broadcast_socket_fd, packet, 1500, 0);
         if (len == -1) {
             fprintf(stderr, "error: socket read '%s'", strerror(errno));
             return NULL;
         } else {
-            broadcast_handler(tinfo->v, packet, len);
+            if ( ! cdj_validate_header(packet, len) ) broadcast_handler(tinfo->v, packet, len);
         }
     }
     return NULL;
@@ -759,13 +748,14 @@ vdj_update_loop(void* arg)
     ssize_t len;
     unsigned char packet[1500];
 
+    vdj_update_running = 1;
     while (vdj_update_running) {
         len = recv(tinfo->v->update_socket_fd, packet, 1500, 0);
         if (len == -1) {
             fprintf(stderr, "error: socket read '%s'", strerror(errno));
             return NULL;
         } else {
-            update_handler(tinfo->v, packet, len);
+            if ( ! cdj_validate_header(packet, len) ) update_handler(tinfo->v, packet, len);
         }
     }
 
@@ -781,6 +771,7 @@ vdj_init_update_thread(vdj_t* v, vdj_update_handler update_handler)
     tinfo->handler = update_handler;
     return pthread_create(&thread_id, NULL, &vdj_update_loop, tinfo);
 }
+
 void
 vdj_stop_update_thread(vdj_t* v)
 {
@@ -800,13 +791,14 @@ vdj_managed_update_loop(void* arg)
     ssize_t len;
     unsigned char packet[1500];
 
+    vdj_update_running = 1;
     while (vdj_update_running) {
         len = recv(v->update_socket_fd, packet, 1500, 0);
         if (len == -1) {
             fprintf(stderr, "socket read error: %s", strerror(errno));
             return NULL;
         } else {
-            vdj_handle_managed_update_datagram(v, update_handler, packet, len);
+            if ( ! cdj_validate_header(packet, len) ) vdj_handle_managed_update_datagram(v, update_handler, packet, len);
         }
     }
     return NULL;
@@ -816,7 +808,6 @@ int
 vdj_init_managed_update_thread(vdj_t* v, vdj_update_handler update_handler)
 {
     if (vdj_update_running) return CDJ_ERROR;
-    vdj_update_running = 1;
 
     if (v->backline == NULL) {
         fprintf(stderr, "error: init a managed discovery thread first\n");
@@ -835,14 +826,13 @@ vdj_init_managed_update_thread(vdj_t* v, vdj_update_handler update_handler)
 }
 
 static void
-vdj_handle_managed_update_datagram(vdj_t* v, vdj_update_handler update_handler, unsigned char* packet, ssize_t len)
+vdj_handle_managed_update_datagram(vdj_t* v, vdj_update_handler update_handler, unsigned char* packet, uint16_t len)
 {
-    int type = cdj_packet_type(packet, len);
+    unsigned char type = cdj_packet_type(packet, len);
     cdj_cdj_status_packet_t* cs_pkt;
     vdj_link_member_t* m;
 
-    switch (type)
-    {
+    switch (type) {
 
         case CDJ_STATUS : {
 

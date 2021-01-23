@@ -5,6 +5,9 @@
  *
  * N.B. this is reverse engineed from packet snooping.
  * 
+ *
+ * https://djl-analysis.deepsymmetry.org/djl-analysis/packets.html
+ *
  * @author teknopaul
  */
 
@@ -20,31 +23,39 @@
 unsigned char CDJ_MAGIC_HEADER[10] = {0x51, 0x73, 0x70, 0x74, 0x31, 0x57, 0x6d, 0x4a, 0x4f, 0x4c}; // reads Qspt1WmJOL
 
 const char*
-cdj_type_to_string(int port, unsigned char type)
+cdj_type_to_string(uint16_t port, unsigned char type, unsigned char sub_type)
 {
     switch (port) {
         case CDJ_DISCOVERY_PORT : {
             switch (type) {
                 case 0x00 : {
-                    return "CDJ_STAGE1_DISCOVERY";
+                    if (sub_type == 0) return "CDJ_STAGE1_DISCOVERY";
+                }
+                case 0x01 : {
+                    if (sub_type == 1) return "CDJ_MIXER_ASSIGN_INTENT";
                 }
                 case 0x02 : {
-                    return "CDJ_ID_USE_REQ";
+                    if (sub_type == 0) return "CDJ_ID_USE_REQ";
                 }
                 case 0x03 : {
-                    return "CDJ_ID_USE_RESP";
+                    if (sub_type == 0) return "CDJ_ID_USE_RESP";
+                    if (sub_type == 1) return "CDJ_MIXER_ASSIGN_CHANNEL";
                 }
                 case 0x04 : {
-                    return "CDJ_ID_SET_REQ";
+                    if (sub_type == 0) return "CDJ_ID_SET_REQ";
+                }
+                case 0x05 : {
+                    if (sub_type == 0) return "CDJ_ID_SET_RESP";
+                    if (sub_type == 1) return "CDJ_MIXER_ASSIGN_FINISHED";
                 }
                 case 0x06 : {
-                    return "CDJ_DEVICE_KEEP_ALIVE";
+                    if (sub_type == 0) return "CDJ_DEVICE_KEEP_ALIVE";
                 }
                 case 0x08 : {
-                    return "CDJ_COLLISION";
+                    if (sub_type == 0) return "CDJ_COLLISION";
                 }
                 case 0x0a : {
-                    return "CDJ_DISCOVERY";
+                    if (sub_type == 0) return "CDJ_DISCOVERY";
                 }
             }
         }
@@ -97,61 +108,71 @@ cdj_type_to_string(int port, unsigned char type)
     }
 }
 
+//SNIP_bpm_madness
 char*
 cdj_bpm_to_string(float bpm)
 {
-    char* state = calloc(1, 24);
-    if (state) snprintf(state, 24, "%06.2f", bpm);
-    return state;
+    char* bpm_s = calloc(1, 24);
+    if (bpm_s) snprintf(bpm_s, 24, "%06.2f", bpm);
+    return bpm_s;
 }
 
 char*
-cdj_state_to_emoji(unsigned char flags)
+cdj_pitch_to_string(uint32_t pitch)
+{
+    char* pitch_s = calloc(1, 24);
+    if (pitch_s) printf(pitch_s, "%+5.2f%%", cdj_pitch_to_percentage(pitch));
+    return pitch_s;
+}
+//SNIP_bpm_madness
+
+char*
+cdj_flags_to_emoji(unsigned char flags)
 {
     char* state = calloc(1, 24);
     if (state) {
         snprintf(state, 24, "%s %s%s%s ", 
-            flags & CDJ_PLAY_STATE_PLAY   ? "▶️" : "⏸️",
-            flags & CDJ_PLAY_STATE_SYNC   ? "🟡" : "⚪",
-            flags & CDJ_PLAY_STATE_MASTER ? "🔴" : "⚪",
-            flags & CDJ_PLAY_STATE_ONAIR  ? "🔇" : "🔊"
+            flags & CDJ_STAT_FLAG_PLAY   ? "▶️" : "⏸️",
+            flags & CDJ_STAT_FLAG_SYNC   ? "🟡" : "⚪",
+            flags & CDJ_STAT_FLAG_MASTER ? "🔴" : "⚪",
+            flags & CDJ_STAT_FLAG_ONAIR  ? "🔇" : "🔊"
             );
     }
     return state;
 }
 
 char*
-cdj_state_to_chars(unsigned char flags)
+cdj_flags_to_chars(unsigned char flags)
 {
     char* state = calloc(1, 5);
     if (state) {
         snprintf(state, 5, "%c%c%c%c", 
-            flags & CDJ_PLAY_STATE_PLAY   ? '>' : '"',
-            flags & CDJ_PLAY_STATE_SYNC   ? 's' : ' ',
-            flags & CDJ_PLAY_STATE_MASTER ? 'm' : ' ',
-            flags & CDJ_PLAY_STATE_ONAIR  ? '*' : ' '
+            flags & CDJ_STAT_FLAG_PLAY   ? '>' : '"',
+            flags & CDJ_STAT_FLAG_SYNC   ? 's' : ' ',
+            flags & CDJ_STAT_FLAG_MASTER ? 'm' : ' ',
+            flags & CDJ_STAT_FLAG_ONAIR  ? '*' : ' '
             );
     }
     return state;
 }
 
 char*
-cdj_state_to_term(unsigned char flags)
+cdj_flags_to_term(unsigned char flags)
 {
     char* state = calloc(1, 44);
     if (state) {
         snprintf(state, 44, "%s%s%s%s", 
-            flags & CDJ_PLAY_STATE_PLAY   ? "\033[5m>\033[0m"  : " ",
-            flags & CDJ_PLAY_STATE_SYNC   ? "\033[93ms\033[0m" : " ",
-            flags & CDJ_PLAY_STATE_MASTER ? "\033[31mM\033[0m" : " ",
-            flags & CDJ_PLAY_STATE_ONAIR  ? "\033[5m*\033[0m"  : " "
+            flags & CDJ_STAT_FLAG_PLAY   ? "\033[5m>\033[0m"  : " ",
+            flags & CDJ_STAT_FLAG_SYNC   ? "\033[93ms\033[0m" : " ",
+            flags & CDJ_STAT_FLAG_MASTER ? "\033[31mM\033[0m" : " ",
+            flags & CDJ_STAT_FLAG_ONAIR  ? "\033[5m*\033[0m"  : " "
             );
     }
     return state;
 }
 
-int
-cdj_header_len(int port, unsigned char type)
+uint16_t
+cdj_header_len(uint16_t port, unsigned char type)
 {
     if (port == CDJ_DISCOVERY_PORT) {
         return 12;
@@ -177,7 +198,7 @@ cdj_ip_format(const char* ip_address, unsigned char* ip)
 
 // convert CDJ format to Linux standard
 struct sockaddr_in*
-cdj_ip_decode(unsigned int ip)
+cdj_ip_decode(uint32_t ip)
 {
     struct sockaddr_in* ip_addr = (struct sockaddr_in*) calloc(1, sizeof(struct sockaddr_in*));
     if (ip_addr) {
@@ -188,7 +209,7 @@ cdj_ip_decode(unsigned int ip)
 }
 
 // convert to CDJ format
-unsigned int
+uint32_t
 cdj_ip_encode(struct sockaddr_in* ip_addr)
 {
     return ntohl(ip_addr->sin_addr.s_addr);
@@ -197,29 +218,13 @@ cdj_ip_encode(struct sockaddr_in* ip_addr)
 
 /**
  * validate that a received packet appears to be the correct protocol
- * packet_type - returns the packet type
  */
 int
-cdj_validate_header(unsigned char* data, int len, int port, int* packet_type) {
+cdj_validate_header(unsigned char* data, uint16_t len) {
 
-    if (len < CDJ_PACKET_TYPE_OFFSET) {
-        perror("packet too short to be a ProDJLink packet");
+    if (len < CDJ_PACKET_TYPE_OFFSET || memcmp(CDJ_MAGIC_HEADER, data, CDJ_MAGIC_HEADER_LENGTH ) != 0 ) {
         return CDJ_ERROR;
     }
-
-    if (len < CDJ_MAGIC_HEADER_LENGTH || memcmp(CDJ_MAGIC_HEADER, data, CDJ_MAGIC_HEADER_LENGTH ) != 0 ) {
-        perror("packet has correct header for the ProDJLink protocol.");
-        return CDJ_ERROR;
-    }
-
-/* TODO validate incomming port is sane
-    final Map<Byte, PacketType> portMap = PACKET_TYPE_MAP.get(port);
-    if (portMap == null) {
-        perror("Do not know any Pro DJ Link packets that are received on port " + port + ".");
-        return CDJ_ERROR;
-    }
-*/
-    if (packet_type) *packet_type = data[CDJ_PACKET_TYPE_OFFSET];
 
     return CDJ_OK;
 }
@@ -232,7 +237,7 @@ cdj_validate_header(unsigned char* data, int len, int port, int* packet_type) {
  * @param struct_len - size of real struct to create
  */
 cdj_generic_packet_t*
-cdj_new_generic_packet(unsigned char* packet, int packet_len, size_t struct_len)
+cdj_new_generic_packet(unsigned char* packet, int packet_len, uint16_t struct_len)
 {
     if (packet_len < CDJ_PACKET_TYPE_OFFSET + 2) return NULL;
     cdj_generic_packet_t* a_pkt = (cdj_generic_packet_t*) calloc(1, struct_len);
@@ -245,14 +250,15 @@ cdj_new_generic_packet(unsigned char* packet, int packet_len, size_t struct_len)
 }
 
 cdj_discovery_packet_t*
-cdj_new_discovery_packet(unsigned char* packet, int len)
+cdj_new_discovery_packet(unsigned char* packet, uint16_t len)
 {
-    if (cdj_validate_header(packet, len, CDJ_DISCOVERY, NULL) != CDJ_OK) {
+    if (cdj_validate_header(packet, len) != CDJ_OK) {
         return NULL;
     }
 
     cdj_discovery_packet_t* d_pkt = (cdj_discovery_packet_t*) cdj_new_generic_packet(packet, len, sizeof(cdj_discovery_packet_t));
     if (d_pkt != NULL) {
+        d_pkt->sub_type = cdj_discovery_sub_type(d_pkt);
         d_pkt->player_id = cdj_discovery_player_id(d_pkt);
         d_pkt->ip = cdj_discovery_ip(d_pkt);
         char* mac = cdj_discovery_mac(d_pkt);
@@ -267,9 +273,9 @@ cdj_new_discovery_packet(unsigned char* packet, int len)
 }
 
 cdj_beat_packet_t*
-cdj_new_beat_packet(unsigned char* packet, int len)
+cdj_new_beat_packet(unsigned char* packet, uint16_t len)
 {
-    if (cdj_validate_header(packet, len, CDJ_DISCOVERY, NULL) != CDJ_OK) {
+    if (cdj_validate_header(packet, len) != CDJ_OK) {
         return NULL;
     }
 
@@ -284,9 +290,9 @@ cdj_new_beat_packet(unsigned char* packet, int len)
 }
 
 cdj_cdj_status_packet_t*
-cdj_new_cdj_status_packet(unsigned char* packet, int len) {
+cdj_new_cdj_status_packet(unsigned char* packet, uint16_t len) {
 
-    if (cdj_validate_header(packet, len, CDJ_UPDATE_PORT, NULL) != CDJ_OK) {
+    if (cdj_validate_header(packet, len) != CDJ_OK) {
         return NULL;
     }
 
@@ -294,14 +300,15 @@ cdj_new_cdj_status_packet(unsigned char* packet, int len) {
     if (cs_pkt != NULL) {
         cs_pkt->player_id = cdj_status_player_id(cs_pkt);
         cs_pkt->bpm = cdj_status_calculated_bpm(cs_pkt);
+        cs_pkt->flags = cdj_status_flags(cs_pkt);
     }
     return cs_pkt;
 }
 
 cdj_mixer_status_packet_t*
-cdj_new_mixer_status_packet(unsigned char* packet, int len) {
+cdj_new_mixer_status_packet(unsigned char* packet, uint16_t len) {
 
-    if (cdj_validate_header(packet, len, CDJ_UPDATE_PORT, NULL) != CDJ_OK) {
+    if (cdj_validate_header(packet, len) != CDJ_OK) {
         return NULL;
     }
 
@@ -315,29 +322,53 @@ cdj_new_mixer_status_packet(unsigned char* packet, int len) {
 // Some of these methods return 0 rather than risk index out of bounds errors, but its the caller's responsibiltiy to make sure the
 // data and message call is sane.  This is done so we can return unsigned char which is much more convenient tham -1 and casting.
 
-// I dont understand these magic numbers they come from DeepSymentry Util.java
-// They work. but I dont see why BPM is not (bpm / 100) * ( pitch / 100,000)
 
+//SNIP_bpm_madness
+
+
+// these are deep symetries versions
+
+// 0x100000 = 1048567
 double
-cdj_pitch_to_percentage(int pitch) {
+cdj_pitch_to_percentage_bpm(uint32_t pitch) {
     return (pitch - 1048567) / 10485.76;
 }
 
+// pitch to BPM multiplier
 double
-cdj_pitch_to_multiplier(int pitch) {
-    return pitch / 104857600.0;
+cdj_pitch_to_multiplier_bpm(uint32_t pitch) {
+    return pitch / 104857600.0;  // pitch ÷ 0x100000 ÷ 100
 }
 
 float
-cdj_calculated_bpm(unsigned int track_bpm, unsigned int pitch)
+cdj_calculated_bpm(uint16_t track_bpm, uint32_t pitch)
 {
-    return (float) (track_bpm * cdj_pitch_to_multiplier(pitch));
+    return (float) (track_bpm * cdj_pitch_to_multiplier_bpm(pitch));
 }
 
-static unsigned int
-cdj_read_uint(unsigned char* data, int pos)
+
+//pitch to multiplier
+double
+cdj_pitch_to_multiplier(uint32_t pitch)
 {
-    unsigned int i = 0;
+    return (double) pitch / (double)0x100000;
+}
+double
+cdj_pitch_to_percentage(uint32_t pitch) {
+    return 100.0 * cdj_pitch_to_multiplier(pitch) - 100.0;
+}
+uint32_t
+cdj_calculated_next(uint32_t next_beat, uint32_t pitch)
+{
+    return (uint32_t) ((double) next_beat * cdj_pitch_to_multiplier(pitch));
+}
+
+//SNIP_bpm_madness
+
+static uint32_t
+cdj_read_uint32(unsigned char* data, uint16_t pos)
+{
+    uint32_t i = 0;
     i |= data[pos++] << 24;
     i |= data[pos++] << 16;
     i |= data[pos++] << 8;
@@ -345,8 +376,8 @@ cdj_read_uint(unsigned char* data, int pos)
     return i;
 }
 
-static unsigned int
-cdj_read_u16int(unsigned char* data, int pos)
+static uint16_t
+cdj_read_uint16(unsigned char* data, uint16_t pos)
 {
     unsigned int i = 0;
     i |= data[pos++] << 8;
@@ -354,16 +385,34 @@ cdj_read_u16int(unsigned char* data, int pos)
     return i;
 }
 
+static void
+cdj_set_uint32(unsigned char* packet_pt, uint32_t i)
+{
+    *packet_pt++ = (unsigned char) (i  >> 24);
+    *packet_pt++ = (unsigned char) (i  >> 16);
+    *packet_pt++ = (unsigned char) (i  >> 8);
+    *packet_pt++ = (unsigned char) (i  >> 0);
+}
+
+static void
+cdj_set_uint16(unsigned char* packet_pt, uint16_t i)
+{
+    *packet_pt++ = (unsigned char) (i  >> 8);
+    *packet_pt++ = (unsigned char) (i  >> 0);
+}
+
+
 // generic
 unsigned char
-cdj_packet_type(unsigned char* packet, int len)
+cdj_packet_type(unsigned char* packet, uint16_t len)
 {
     if (len < CDJ_PACKET_TYPE_OFFSET + 1) return 255;
     return packet[CDJ_PACKET_TYPE_OFFSET];
 }
 
+
 char*
-cdj_model_name(unsigned char* packet, int len, int port)
+cdj_model_name(unsigned char* packet, uint16_t len, uint16_t port)
 {
     char* model = calloc(1, CDJ_DEVICE_MODEL_LENGTH + 1);
     if (len > 0x20) {
@@ -372,7 +421,17 @@ cdj_model_name(unsigned char* packet, int len, int port)
     return model;
 }
 
+
 // discovery
+
+// discovery now has a sub type for mixer chanel assignments
+unsigned char
+cdj_discovery_sub_type(cdj_discovery_packet_t* d_pkt)
+{
+    if (d_pkt->len < CDJ_PACKET_TYPE_OFFSET + 2) return 255;
+    return d_pkt->data[CDJ_PACKET_TYPE_OFFSET + 1];
+}
+
 unsigned char
 cdj_discovery_player_id(cdj_discovery_packet_t* d_pkt)
 {
@@ -383,41 +442,56 @@ cdj_discovery_player_id(cdj_discovery_packet_t* d_pkt)
             return 0;
         }
         case CDJ_ID_USE_REQ: {
-            if (d_pkt->len < 0x2f) return 0;
-            return d_pkt->data[0x2e];
+            if (d_pkt->sub_type == 0) {
+                if (d_pkt->len < 0x2f) return 0;
+                return d_pkt->data[0x2e];
+            }
+            break;
         }
         case CDJ_ID_SET_REQ:
         case CDJ_ID_USE_RESP:
         case CDJ_KEEP_ALIVE: {
-            if (d_pkt->len < 0x25) return 0;
-            return d_pkt->data[0x24];
+            if (d_pkt->sub_type == 0) {
+                if (d_pkt->len < 0x25) return 0;
+                return d_pkt->data[0x24];
+            }
+            break;
         }
     }
     if (d_pkt->len < 0x22) return 0;
     return d_pkt->data[0x21];
 }
-unsigned int
+uint32_t
 cdj_discovery_ip(cdj_discovery_packet_t* d_pkt)
 {
     switch (cdj_packet_type(d_pkt->data, d_pkt->len)) {
         case CDJ_DISCOVERY:
         case CDJ_STAGE1_DISCOVERY: {
-            return 0;
+            break;
         }
         case CDJ_ID_USE_REQ: {
-            if (d_pkt->len < 0x27) return 0;
-            return cdj_read_uint(d_pkt->data, 0x24);
+            if (d_pkt->sub_type == 0) {
+                if (d_pkt->len < 0x27) return 0;
+                return cdj_read_uint32(d_pkt->data, 0x24);
+            }
+            break;
         }
         case CDJ_ID_USE_RESP: {
-            return 0;
+            break;
         }
         case CDJ_COLLISION: {
-            if (d_pkt->len < 0x29) return 0;
-            return cdj_read_uint(d_pkt->data, 0x25);
+            if (d_pkt->sub_type == 0) {
+                if (d_pkt->len < 0x29) return 0;
+                return cdj_read_uint32(d_pkt->data, 0x25);
+            }
+            break;
         }
         case CDJ_KEEP_ALIVE: {
-            if (d_pkt->len < 0x2f) return 0;
-            return cdj_read_uint(d_pkt->data, 0x2c);
+            if (d_pkt->sub_type == 0) {
+                if (d_pkt->len < 0x2f) return 0;
+                return cdj_read_uint32(d_pkt->data, 0x2c);
+            }
+            break;
         }
     }
     return 0;
@@ -432,23 +506,27 @@ cdj_discovery_mac(cdj_discovery_packet_t* d_pkt)
     switch (cdj_packet_type(d_pkt->data, d_pkt->len)) {
         case CDJ_KEEP_ALIVE:
         case CDJ_STAGE1_DISCOVERY: {
-            if (d_pkt->len < 0x2c) return 0;
-            mac[0] = d_pkt->data[0x26];
-            mac[1] = d_pkt->data[0x27];
-            mac[2] = d_pkt->data[0x28];
-            mac[3] = d_pkt->data[0x29];
-            mac[4] = d_pkt->data[0x2a];
-            mac[5] = d_pkt->data[0x2b];
+            if (d_pkt->sub_type == 0) {
+                if (d_pkt->len < 0x2c) return 0;
+                mac[0] = d_pkt->data[0x26];
+                mac[1] = d_pkt->data[0x27];
+                mac[2] = d_pkt->data[0x28];
+                mac[3] = d_pkt->data[0x29];
+                mac[4] = d_pkt->data[0x2a];
+                mac[5] = d_pkt->data[0x2b];
+            }
             break;
         }
         case CDJ_ID_USE_REQ: {
-            if (d_pkt->len < 0x2e) return 0;
-            mac[0] = d_pkt->data[0x28];
-            mac[1] = d_pkt->data[0x29];
-            mac[2] = d_pkt->data[0x2a];
-            mac[3] = d_pkt->data[0x2b];
-            mac[4] = d_pkt->data[0x2c];
-            mac[5] = d_pkt->data[0x2d];
+            if (d_pkt->sub_type == 0) {
+                if (d_pkt->len < 0x2e) return 0;
+                mac[0] = d_pkt->data[0x28];
+                mac[1] = d_pkt->data[0x29];
+                mac[2] = d_pkt->data[0x2a];
+                mac[3] = d_pkt->data[0x2b];
+                mac[4] = d_pkt->data[0x2c];
+                mac[5] = d_pkt->data[0x2d];
+            }
             break;
         }
     }
@@ -501,30 +579,30 @@ cdj_status_track_type(cdj_cdj_status_packet_t* cs_pkt)
 /**
  * recordbox track id (labeled `recordbox` in pdf), or CD track number, number used to request track meta data
  */
-unsigned int
+uint32_t
 cdj_status_track_id(cdj_cdj_status_packet_t* cs_pkt)
 {
     if (cs_pkt->len < 0x2e) return 0;
-    return cdj_read_uint(cs_pkt->data, 0x2c);
+    return cdj_read_uint32(cs_pkt->data, 0x2c);
 }
 /**
  * Load a uint alto I think the devices are actuall limited to 4000 tracks per playlist.
  * Potentialy can be used to auto-play a whole playlist?
  */
-unsigned int
+uint32_t
 cdj_status_track_number(cdj_cdj_status_packet_t* cs_pkt)
 {
     if (cs_pkt->len < 0x32) return 0;
-    return cdj_read_uint(cs_pkt->data, 0x30);
+    return cdj_read_uint32(cs_pkt->data, 0x30);
 }
 /**
  * 00 no CD, 1e audio CD loaded, 11 MP3/data disk
  */
-unsigned int
+uint32_t
 cdj_status_cd_data_type(cdj_cdj_status_packet_t* cs_pkt)
 {
     if (cs_pkt->len < 0x39) return 0;
-    return cdj_read_uint(cs_pkt->data, 0x37);
+    return cdj_read_uint32(cs_pkt->data, 0x37);
 }
 /*
 Value   Meaning
@@ -540,36 +618,36 @@ Value   Meaning
 0e      Audio CD has spun down due to lack of use
 11      Player reached the end of the track and stopped
  */
-unsigned int
+unsigned char
 cdj_status_play_mode(cdj_cdj_status_packet_t* cs_pkt)
 {
     if (cs_pkt->len < 0x7a) return 0;
     return cs_pkt->data[0x7b];
 }
 
-unsigned int
+uint32_t
 cdj_status_sync_counter(cdj_cdj_status_packet_t* cs_pkt)
 {
     if (cs_pkt->len < 0x84) return 0;
-    return cdj_read_uint(cs_pkt->data, 0x84);
+    return cdj_read_uint32(cs_pkt->data, 0x84);
 }
 /**
- * return a bit mask, or play state, e.g. flag & with CDJ_PLAY_STATE_*
+ * F1 - return a bit mask, of play state, e.g. flag & with CDJ_PLAY_STATE_*
  */
 unsigned char
-cdj_status_sync_flags(cdj_cdj_status_packet_t* cs_pkt)
+cdj_status_flags(cdj_cdj_status_packet_t* cs_pkt)
 {
     if (cs_pkt->len < 0x88) return 0;
     return cs_pkt->data[0x89];
 }
 /**
- * P2 play state indicator different per CDJ type
+ * P2 - play state indicator different per CDJ type
  */
-unsigned int
+uint32_t
 cdj_status_sync_state(cdj_cdj_status_packet_t* cs_pkt)
 {
     if (cs_pkt->len < 0x8d) return 0;
-    return cdj_read_uint(cs_pkt->data, 0x8b);
+    return cdj_read_uint32(cs_pkt->data, 0x8b);
 }
 /**
  * @returns  CDJ_MASTER_STATE_* 00 not master, 01 tempo master, 02 master but no beat grid
@@ -601,66 +679,87 @@ cdj_status_bar_pos(cdj_cdj_status_packet_t* cs_pkt)
 }
 
 
-unsigned int
+uint16_t
 cdj_status_bpm(cdj_cdj_status_packet_t* cs_pkt)
 {
     if (cs_pkt->len < 0x92) return 0;
-    unsigned int bpm = cdj_read_u16int(cs_pkt->data, 0x92);
+    unsigned int bpm = cdj_read_uint16(cs_pkt->data, 0x92);
     if (0xffff == bpm) return 0;
     return bpm;
 
 }
-unsigned int
+uint32_t
 cdj_status_pitch(cdj_cdj_status_packet_t* cs_pkt)
 {
     if (cs_pkt->len < 0x8e) return 0;
-    return cdj_read_uint(cs_pkt->data, 0x8c);
+    return cdj_read_uint32(cs_pkt->data, 0x8c);
 }
 float
 cdj_status_calculated_bpm(cdj_cdj_status_packet_t* cs_pkt) {
     return cdj_calculated_bpm(cdj_status_bpm(cs_pkt), cdj_status_pitch(cs_pkt));
 }
-unsigned int
+uint32_t
 cdj_status_pitch_per_fader(cdj_cdj_status_packet_t* cs_pkt)
 {
     if (cs_pkt->len < 0xc2) return 0;
-    return cdj_read_uint(cs_pkt->data, 0xc0);
+    return cdj_read_uint32(cs_pkt->data, 0xc0);
 }
-unsigned int
+uint32_t
 cdj_status_counter(cdj_cdj_status_packet_t* cs_pkt)
 {
     if (cs_pkt->len < 0xcb) return 0;
-    return cdj_read_uint(cs_pkt->data, 0xc8);
+    return cdj_read_uint32(cs_pkt->data, 0xc8);
 }
 
-// beat
 
-unsigned int
+// beat
+// this returns the BPM x 100
+uint16_t
 cdj_beat_bpm(cdj_beat_packet_t* b_pkt)
 {
     if (b_pkt->len < 0x5a) return 0;
-    return cdj_read_u16int(b_pkt->data, 0x5a);
+    return cdj_read_uint16(b_pkt->data, 0x5a);
 }
-unsigned int
+// N.B. this gives you a 4 byte int, but careful, its not a typical C int.  See docs for details of hot to interpret this number
+uint32_t
 cdj_beat_pitch(cdj_beat_packet_t* b_pkt)
 {
     if (b_pkt->len < 0x56) return 0;
-    return cdj_read_uint(b_pkt->data, 0x54);
+    return cdj_read_uint32(b_pkt->data, 0x54);
 }
+// this method does the math to get actual BPM.
 float
 cdj_beat_calculated_bpm(cdj_beat_packet_t* b_pkt) 
 {
     return cdj_calculated_bpm(cdj_beat_bpm(b_pkt), cdj_beat_pitch(b_pkt));
 }
+double
+cdj_beat_calculated_pitch(cdj_beat_packet_t* b_pkt)
+{
+    if (b_pkt->len < 0x56) return 0;
+    uint32_t pitch = cdj_beat_pitch(b_pkt);
+    int32_t decimal = 
+        (((unsigned char) pitch >> 16) * 10000) +  // I guess some bright spark at Pioneer
+        (((unsigned char) pitch >> 8) *  100) +    // figured you can only fit 1 to 100 in a byte, doh!
+        (((unsigned char) pitch >> 0) *  1);       // Id pay good money to see the comments in the code :)
+    return (double)(decimal - 100000) / 100000.0;
+}
+//
+uint32_t
+cdj_beat_next(cdj_beat_packet_t* b_pkt)
+{
+    return cdj_read_uint32(b_pkt->data, 0x24);
+}
+
 // this is bpm taken from the miliseconds diff between the next beat and the 8th beat (the longest time diff provided in a beat packet)
 // I'm not quite brainy enough to work out why this does not give us better resolution bpm, using bpm as a float is recommended
-// N.N. this will only work if we are at the start of a constant bpm track.
+// N.B. this will only work if we are at the start of a constant bpm track.
 double
 cdj_beat_measured_bpm(cdj_beat_packet_t* b_pkt) 
 {
     unsigned int b1, b2;
-    b1 = cdj_read_uint(b_pkt->data, 0x24);
-    b2 = cdj_read_uint(b_pkt->data, 0x38);
+    b1 = cdj_read_uint32(b_pkt->data, 0x24);
+    b2 = cdj_read_uint32(b_pkt->data, 0x38);
     double pitch = cdj_beat_pitch(b_pkt) / 100000.0;
     return pitch * (1.0 / ((double)(b2 - b1) / (6000000.0 * 7.0)));
 }
@@ -700,25 +799,9 @@ cdj_set_model_name(unsigned char* packet_pt, unsigned char model)
     packet_pt[0] = model;
 }
 
-static void
-cdj_set_int(unsigned char* packet_pt, unsigned int i)
-{
-    *packet_pt++ = (unsigned char) (i  >> 24);
-    *packet_pt++ = (unsigned char) (i  >> 16);
-    *packet_pt++ = (unsigned char) (i  >> 8);
-    *packet_pt++ = (unsigned char) (i  >> 0);
-}
-static void
-cdj_set_u16int(unsigned char* packet_pt, unsigned int i)
-{
-    *packet_pt++ = (unsigned char) (i  >> 8);
-    *packet_pt++ = (unsigned char) (i  >> 0);
-}
-
-
 // CDJ_Protocol_Analysis.pdf Figure 6
 unsigned char*
-cdj_create_initial_discovery_packet(int* length, unsigned char model)
+cdj_create_initial_discovery_packet(uint16_t* length, unsigned char model)
 {
     *length = 0x25;
     unsigned char* packet = (unsigned char*) calloc(1, *length);
@@ -727,7 +810,7 @@ cdj_create_initial_discovery_packet(int* length, unsigned char model)
         cdj_set_model_name(packet + cdj_header_len(50000, CDJ_DISCOVERY), model);
         packet[0x20] = 0x01;
         packet[0x21] = 0x02;
-        cdj_set_u16int(packet + 0x22, *length);
+        cdj_set_uint16(packet + 0x22, *length);
         packet[0x24] = 0x01; // TODO potentially should change for other devices
     }
     return packet;
@@ -735,7 +818,7 @@ cdj_create_initial_discovery_packet(int* length, unsigned char model)
 
 // CDJ_Protocol_Analysis.pdf Figure 7
 unsigned char*
-cdj_create_stage1_discovery_packet(int* length, unsigned char model, unsigned char *mac, unsigned char n)
+cdj_create_stage1_discovery_packet(uint16_t* length, unsigned char model, unsigned char *mac, unsigned char n)
 {
     *length = 0x2c;
     unsigned char* packet = (unsigned char*) calloc(1, *length);
@@ -744,7 +827,7 @@ cdj_create_stage1_discovery_packet(int* length, unsigned char model, unsigned ch
         cdj_set_model_name(packet + cdj_header_len(50000, CDJ_DISCOVERY), model);
         packet[0x20] = 0x01;
         packet[0x21] = 0x02;
-        cdj_set_u16int(packet + 0x22, *length);
+        cdj_set_uint16(packet + 0x22, *length);
         packet[0x24] = n;
         packet[0x25] = 0x01; // CDJ (mixer is 0x02)
         memcpy(packet + 0x26, mac, 6);
@@ -752,15 +835,15 @@ cdj_create_stage1_discovery_packet(int* length, unsigned char model, unsigned ch
     return packet;
 }
 
-void 
+unsigned char 
 cdj_inc_stage1_discovery_packet(unsigned char* packet)
 {
-    packet[0x24]++;
+    return ++packet[0x24];
 }
 
 
 unsigned char*
-cdj_create_id_use_req_packet(int* length, unsigned char model, unsigned char* ip, unsigned char* mac, unsigned char player_id, unsigned char n)
+cdj_create_id_use_req_packet(uint16_t* length, unsigned char model, unsigned char* ip, unsigned char* mac, unsigned char player_id, unsigned char n)
 {
     *length = 0x32;
     unsigned char* packet = (unsigned char*) calloc(1, *length);
@@ -769,7 +852,7 @@ cdj_create_id_use_req_packet(int* length, unsigned char model, unsigned char* ip
         cdj_set_model_name(packet + cdj_header_len(50000, CDJ_ID_USE_REQ), model);
         packet[0x20] = 0x01;
         packet[0x21] = 0x02;
-        cdj_set_u16int(packet + 0x22, *length);
+        cdj_set_uint16(packet + 0x22, *length);
         memcpy(packet + 0x24, ip, 4);
         memcpy(packet + 0x28, mac, 6);
         packet[0x2e] = player_id;
@@ -780,12 +863,13 @@ cdj_create_id_use_req_packet(int* length, unsigned char model, unsigned char* ip
     return packet;
 }
 
-int 
+unsigned char
 cdj_inc_id_use_req_packet(unsigned char* packet)
 {
     return ++packet[0x2f];
 }
-void 
+
+void
 cdj_mod_id_use_req_packet_player_id(unsigned char* packet, unsigned char player_id)
 {
     packet[0x2e] = player_id;
@@ -793,7 +877,7 @@ cdj_mod_id_use_req_packet_player_id(unsigned char* packet, unsigned char player_
 
 
 unsigned char*
-cdj_create_id_use_resp_packet(int* length, unsigned char model, unsigned char player_id, unsigned char* ip)
+cdj_create_id_use_resp_packet(uint16_t* length, unsigned char model, unsigned char player_id, unsigned char* ip)
 {
     *length = 0x29;
     unsigned char* packet = (unsigned char*) calloc(1, *length);
@@ -802,7 +886,7 @@ cdj_create_id_use_resp_packet(int* length, unsigned char model, unsigned char pl
         cdj_set_model_name(packet + cdj_header_len(50000, CDJ_DISCOVERY), model);
         packet[0x20] = 0x01;
         packet[0x21] = 0x02;
-        cdj_set_u16int(packet + 0x22, *length);
+        cdj_set_uint16(packet + 0x22, *length);
         packet[0x24] = player_id;
         memcpy(packet + 0x25, ip, 4);
     }
@@ -811,7 +895,7 @@ cdj_create_id_use_resp_packet(int* length, unsigned char model, unsigned char pl
 
 
 unsigned char*
-cdj_create_id_set_req_packet(int* length, unsigned char model, unsigned char player_id, unsigned char n)
+cdj_create_id_set_req_packet(uint16_t* length, unsigned char model, unsigned char player_id, unsigned char n)
 {
     *length = 0x26;
     unsigned char* packet = (unsigned char*) calloc(1, *length);
@@ -820,21 +904,21 @@ cdj_create_id_set_req_packet(int* length, unsigned char model, unsigned char pla
         cdj_set_model_name(packet + cdj_header_len(50000, CDJ_DISCOVERY), model);
         packet[0x20] = 0x01;
         packet[0x21] = 0x02;
-        cdj_set_u16int(packet + 0x22, *length);
+        cdj_set_uint16(packet + 0x22, *length);
         packet[0x24] = player_id;
         packet[0x25] = n;
     }
     return packet;
 }
 
-int 
+unsigned char
 cdj_inc_id_set_req_packet(unsigned char* packet)
 {
     return ++packet[0x25];
 }
 
 unsigned char*
-cdj_create_keepalive_packet(int* length, unsigned char model, unsigned char* ip, unsigned char* mac, unsigned char player_id, unsigned char member_count)
+cdj_create_keepalive_packet(uint16_t* length, unsigned char model, unsigned char* ip, unsigned char* mac, unsigned char player_id, unsigned char member_count)
 {
     *length = 0x36;
     unsigned char* packet = (unsigned char*) calloc(1, *length);
@@ -843,7 +927,7 @@ cdj_create_keepalive_packet(int* length, unsigned char model, unsigned char* ip,
         cdj_set_model_name(packet + cdj_header_len(50000, CDJ_DISCOVERY), model);
         packet[0x20] = 0x01;
         packet[0x21] = 0x02;
-        cdj_set_u16int(packet + 0x22, *length);
+        cdj_set_uint16(packet + 0x22, *length);
         packet[0x24] = player_id;
         packet[0x25] = 0x02;
         memcpy(packet + 0x26, mac, 6);
@@ -859,7 +943,7 @@ cdj_create_keepalive_packet(int* length, unsigned char model, unsigned char* ip,
 }
 
 unsigned char*
-cdj_create_id_collision_packet(int* length, unsigned char model, unsigned char player_id, unsigned char* ip)
+cdj_create_id_collision_packet(uint16_t* length, unsigned char model, unsigned char player_id, unsigned char* ip)
 {
     *length = 0x29;
     unsigned char* packet = (unsigned char*) calloc(1, *length);
@@ -868,7 +952,7 @@ cdj_create_id_collision_packet(int* length, unsigned char model, unsigned char p
         cdj_set_model_name(packet + cdj_header_len(50000, CDJ_DISCOVERY), model);
         packet[0x20] = 0x01;
         packet[0x21] = 0x02;
-        cdj_set_u16int(packet + 0x22, *length);
+        cdj_set_uint16(packet + 0x22, *length);
         packet[0x24] = player_id;
         memcpy(packet + 0x25, ip, 4);
     }
@@ -876,10 +960,10 @@ cdj_create_id_collision_packet(int* length, unsigned char model, unsigned char p
 }
 
 
-static int
+static uint32_t
 cdj_beat_millis(float bpm)
 {
-    return (int) (60000.0 / bpm);
+    return (uint32_t) (60000.0 / bpm);
 }
 
 /**
@@ -897,13 +981,13 @@ cdj_beat_millis(float bpm)
  * @param bar_index - 0 - 3, where in the bar we are, protocol presumes 4/4 timing
  */ 
 unsigned char*
-cdj_create_beat_packet(int* length, unsigned char model, unsigned char player_id, float bpm, unsigned char bar_index)
+cdj_create_beat_packet(uint16_t* length, unsigned char model, unsigned char player_id, float bpm, unsigned char bar_index)
 {
     *length = 0x60;
     int beat_offset;
-    unsigned int beat_pos;
-    unsigned int bar_pos;
-    unsigned int millis_in_a_beat = cdj_beat_millis(bpm);
+    uint32_t beat_pos;
+    uint32_t bar_pos;
+    uint32_t millis_in_a_beat = cdj_beat_millis(bpm);
 
     unsigned char* packet = (unsigned char*) calloc(1, *length);
     if (packet) {
@@ -912,37 +996,37 @@ cdj_create_beat_packet(int* length, unsigned char model, unsigned char player_id
         packet[0x1f] = 0x01;       // wtf
         packet[0x20] = 0x00;
         packet[0x21] = player_id;  // device number or player number?
-        cdj_set_u16int(packet + 0x22, *length);
+        cdj_set_uint16(packet + 0x22, *length);
 
         beat_offset = 0x24;
         
         // nextBeat
         beat_pos = millis_in_a_beat;
-        cdj_set_int(packet + beat_offset, beat_pos); beat_offset += 4;
+        cdj_set_uint32(packet + beat_offset, beat_pos); beat_offset += 4;
         // 2ndBeat
         beat_pos += millis_in_a_beat;
-        cdj_set_int(packet + beat_offset, beat_pos); beat_offset += 4;
+        cdj_set_uint32(packet + beat_offset, beat_pos); beat_offset += 4;
         // nextBar
         bar_pos = (4 - bar_index) * millis_in_a_beat;
-        cdj_set_int(packet + beat_offset, bar_pos); beat_offset += 4;
+        cdj_set_uint32(packet + beat_offset, bar_pos); beat_offset += 4;
         // 4thBeat
         beat_pos += 2 * millis_in_a_beat;
-        cdj_set_int(packet + beat_offset, beat_pos); beat_offset += 4;
+        cdj_set_uint32(packet + beat_offset, beat_pos); beat_offset += 4;
         // 2ndBar
         bar_pos = (8 - bar_index) * millis_in_a_beat;
-        cdj_set_int(packet + beat_offset, bar_pos); beat_offset += 4;
+        cdj_set_uint32(packet + beat_offset, bar_pos); beat_offset += 4;
         //8thBeat
         beat_pos += 4 * millis_in_a_beat;
-        cdj_set_int(packet + beat_offset, beat_pos); beat_offset += 4;
+        cdj_set_uint32(packet + beat_offset, beat_pos); beat_offset += 4;
 
         memset(packet + 0x3c, 0xff, 24);
 
         // TODO pitch, midi does not pitch adjust
-        cdj_set_int(packet + 0x54, 0x00100000);
+        cdj_set_uint32(packet + 0x54, 0x00100000);
 
         // bpm (protocol hardcodes to 2 decimal places, but seems to reserve space)
-        int bpm_i = (int) (bpm * 100);
-        cdj_set_int(packet + 0x58, bpm_i);
+        uint16_t bpm_i = (uint16_t) (bpm * 100);
+        cdj_set_uint32(packet + 0x58, bpm_i);
 
         // b, bar index
         packet[0x5c] = bar_index + 1;
@@ -954,9 +1038,9 @@ cdj_create_beat_packet(int* length, unsigned char model, unsigned char player_id
 
 
 unsigned char*
-cdj_create_status_packet(int* length, unsigned char model, unsigned char player_id,
-    float bpm, unsigned char bar_index, unsigned char active, unsigned char master, unsigned int sync_counter,
-    unsigned int n)
+cdj_create_status_packet(uint16_t* length, unsigned char model, unsigned char player_id,
+    float bpm, unsigned char bar_index, unsigned char active, unsigned char master, uint32_t sync_counter,
+    uint32_t n)
 {
     *length = 0xd4;
     unsigned char* packet = (unsigned char*) calloc(1, *length);
@@ -966,7 +1050,7 @@ cdj_create_status_packet(int* length, unsigned char model, unsigned char player_
         packet[0x1f] = 0x01;
         packet[0x20] = 0x03;
         packet[0x21] = player_id;
-        cdj_set_u16int(packet + 0x22, *length);
+        cdj_set_uint16(packet + 0x22, *length);
         packet[0x24] = player_id;
         packet[0x25] = 0x00;
         packet[0x26] = 0x00;       // unknown
@@ -983,8 +1067,8 @@ cdj_create_status_packet(int* length, unsigned char model, unsigned char player_
         packet[0x47] = 0x08;
 
         // track id
-        cdj_set_int(packet + 0x2c, 0x01); // static 1 for the moment since we don yet support media queries
-        cdj_set_int(packet + 0x30, 0x01); // track number
+        cdj_set_uint32(packet + 0x2c, 0x01); // static 1 for the moment since we don yet support media queries
+        cdj_set_uint32(packet + 0x30, 0x01); // track number
 
 
         packet[0x68] = 0x01; // wtf
@@ -1000,39 +1084,39 @@ cdj_create_status_packet(int* length, unsigned char model, unsigned char player_
         packet[0x7e] = 0x30;  // 0
         packet[0x7f] = 0x35;  // 5
 
-        cdj_set_int(packet + 0x84, sync_counter);
+        cdj_set_uint32(packet + 0x84, sync_counter);
 
-        packet[0x89] = CDJ_PLAY_STATE_BASE | CDJ_PLAY_STATE_PLAY; // TODO nexus flags sync & onair
+        packet[0x89] = CDJ_STAT_FLAG_BASE; // TODO nexus flags sync & onair
         if (active) {
-            packet[0x89] |= CDJ_PLAY_STATE_PLAY;
+            packet[0x89] |= CDJ_STAT_FLAG_PLAY;
         }
         if (master) {
-            packet[0x89] |= CDJ_PLAY_STATE_MASTER;
+            packet[0x89] |= CDJ_STAT_FLAG_MASTER;
         }
         packet[0x8a] = 0xff;
 
         // pitch
-        cdj_set_int(packet + 0x8c, CDJ_PITCH_NORMAL);
-        cdj_set_int(packet + 0x98, CDJ_PITCH_NORMAL);
-        cdj_set_int(packet + 0xc0, CDJ_PITCH_NORMAL);
-        cdj_set_int(packet + 0xc4, CDJ_PITCH_NORMAL);
+        cdj_set_uint32(packet + 0x8c, CDJ_PITCH_NORMAL);
+        cdj_set_uint32(packet + 0x98, CDJ_PITCH_NORMAL);
+        cdj_set_uint32(packet + 0xc0, CDJ_PITCH_NORMAL);
+        cdj_set_uint32(packet + 0xc4, CDJ_PITCH_NORMAL);
 
         // bpm
         // Mv 
-        cdj_set_u16int(packet + 0x90, 0x8000); // 8000 is track loaded, you can sync from me, Mv for master handoffs  backline->master_new
+        cdj_set_uint16(packet + 0x90, 0x8000); // 8000 is track loaded, you can sync from me, Mv for master handoffs  backline->master_new
         // bpm x 100  as an int
-        cdj_set_u16int(packet + 0x92, (int) (bpm * 100.0));
+        cdj_set_uint16(packet + 0x92, (int) (bpm * 100.0));
 
         packet[0x9e] = master ? 0x01 : 0x00;  // Mm Now I am the master
         packet[0x9f] = 0xff;  // Mh master handoff, new_master goes here if we get sent a master_req
 
-        cdj_set_int(packet + 0xc4, CDJ_PITCH_NORMAL);
+        cdj_set_uint32(packet + 0xc4, CDJ_PITCH_NORMAL);
         // magic / unknown
-        cdj_set_int(packet + 0x94, 0x7fffffff);
+        cdj_set_uint32(packet + 0x94, 0x7fffffff);
 
         packet[0xa6] = 1 + bar_index;
 
-        cdj_set_int(packet + 0xc8, n);
+        cdj_set_uint32(packet + 0xc8, n);
         packet[0xcc] = 0x0f;  // I am nexus
 
     }
@@ -1041,7 +1125,7 @@ cdj_create_status_packet(int* length, unsigned char model, unsigned char player_
 
 
 unsigned char*
-cdj_create_master_request_packet(int* length, unsigned char model, unsigned char player_id)
+cdj_create_master_request_packet(uint16_t* length, unsigned char model, unsigned char player_id)
 {
     *length = 0x28;
     unsigned char* packet = (unsigned char*) calloc(1, *length);
@@ -1060,7 +1144,7 @@ cdj_create_master_request_packet(int* length, unsigned char model, unsigned char
  * Accept a take over request, DM to requester
  */
 unsigned char*
-cdj_create_master_response_packet(int* length, unsigned char model, unsigned char player_id)
+cdj_create_master_response_packet(uint16_t* length, unsigned char model, unsigned char player_id)
 {
     *length = 0x2c;
     unsigned char* packet = (unsigned char*) calloc(1, *length);
@@ -1077,7 +1161,7 @@ cdj_create_master_response_packet(int* length, unsigned char model, unsigned cha
 }
 
 unsigned char*
-cdj_create_sync_control_packet(int* length, unsigned char model, unsigned char player_id, int on_off)
+cdj_create_sync_control_packet(uint16_t* length, unsigned char model, unsigned char player_id, int on_off)
 {
     *length = 0x2c;
     unsigned char* packet = (unsigned char*) calloc(1, *length);
@@ -1096,14 +1180,14 @@ cdj_create_sync_control_packet(int* length, unsigned char model, unsigned char p
 // DEBUG
 
 void
-cdj_print_packet(unsigned char* packet, int length, int port)
+cdj_print_packet(unsigned char* packet, uint16_t length, uint16_t port)
 {
     int i;
     char* str = (char*) calloc(1, (length * 4) + 5 + length / 32);
     if (str == NULL) return;
 
-    int type = packet[CDJ_PACKET_TYPE_OFFSET];
-    int hdr_len = cdj_header_len(port, type);
+    unsigned char type = packet[CDJ_PACKET_TYPE_OFFSET];
+    uint16_t hdr_len = cdj_header_len(port, type);
 
     char* s = str;
 
@@ -1116,7 +1200,7 @@ cdj_print_packet(unsigned char* packet, int length, int port)
         else s += snprintf(s, 4, "%02x ", packet[i]);
     }
 
-    printf("packet::%03x %i\n'%s' type=%02x:%s\n%s\n", length, length, packet + hdr_len, packet[10], cdj_type_to_string(port, packet[10]), str);
+    printf("packet::%03x %i\n'%s' type=%02x:%s\n%s\n", length, length, packet + hdr_len, packet[10], cdj_type_to_string(port, packet[10], packet[11]), str);
     free(str);
 }
 

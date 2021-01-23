@@ -1,3 +1,5 @@
+.bzr/
+.bzrignore
 target/
 doc-internal/
 .sublime-project

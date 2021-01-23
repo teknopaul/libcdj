@@ -17,12 +17,12 @@ int vdj_has_single_ip();
 /**
  * If the host only has one network card and one IP address we can assume this is the CDJ LAN.
  */
-int vdj_get_single_ip(char * iface, struct sockaddr_in* addr, struct sockaddr_in* netmask);
+int vdj_get_single_ip(char* iface, struct sockaddr_in* addr, struct sockaddr_in* netmask);
 
 /**
  * find the ip address of a given interface
  */
-int vdj_find_ip(const char * iface, struct sockaddr_in* addr, struct sockaddr_in* netmask);
+int vdj_find_ip(const char* iface, struct sockaddr_in* addr, struct sockaddr_in* netmask);
 
 /**
  * mac - pointer to a char[6] to return the mac address as a number

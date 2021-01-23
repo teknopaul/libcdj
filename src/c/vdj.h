@@ -2,6 +2,10 @@
 #ifndef _VDJ_H_INCLUDED_
 #define _VDJ_H_INCLUDED_
 
+#include <time.h>
+#include <inttypes.h>
+
+#include "cdj.h"
 
 #define VDJ_OK          0
 #define VDJ_ERROR       1
@@ -17,9 +21,10 @@
 #define VDJ_FLAG_DEV_XDJ          0x10  // pretend to be an XDJ
 #define VDJ_FLAG_DEV_CDJ          0x20  // pretend to be an XDJ
 #define VDJ_FLAG_AUTO_ID          0x40  // automatically assign an id
+#define VDJ_FLAG_PRINT_IP         0x80  // print resolved ip address to stdout
+
 
 // data structures
-
 
 // Remote (real) CDJ
 typedef struct {
@@ -41,9 +46,9 @@ typedef struct {
     unsigned char       player_count;
     vdj_link_member_t*  link_members[VDJ_MAX_BACKLINE + 1];  // link member in the slot for its player_id, in theory there are 255 slots in the protocol, 32 decks should be enough for Jeff Mills
     unsigned char       master_id;         // this VCDJ's opinion as to who is the master (there is negotiation across all the connected players) 0 = no master
-    unsigned int        sync_counter;      // used for becoming master its a counter/sequence of all the ever handoffs
+    uint32_t            sync_counter;      // used for becoming master its a counter/sequence of all the ever handoffs
     unsigned char       master_new;        // new master being negotiated
-    float               master_bpm;        // bpm ot the player thas claims to be beat sync master
+    float               master_bpm;        // bpm of the player thas claims to be beat sync master
 } vdj_backline_t;
 
 // Local VCDJ
@@ -71,7 +76,7 @@ typedef struct {
     unsigned int        have_id:1;      // automatically assign id
 
     // state
-    unsigned int        status_counter; // how many status packets have been sent
+    uint32_t            status_counter; // how many status packets have been sent
     unsigned char       master;         // I think i am master
     unsigned char       master_req;     // this player wants to be master
     float               bpm;            // my virtual device's bpm
@@ -85,18 +90,20 @@ typedef struct  {
 } vdj_thread_info;
 
 
+
 // handlers
 
-// TODO formatted structs
+// raw handlers
 
-typedef void (*vdj_update_handler)(vdj_t* v, unsigned char* packet, int packet_length);
-typedef void (*vdj_broadcast_handler)(vdj_t* v, unsigned char* packet, int packet_length);
-typedef void (*vdj_discovery_handler)(vdj_t* v, unsigned char* packet, int packet_length);
+typedef void (*vdj_update_handler)(vdj_t* v, unsigned char* packet, uint16_t packet_length);
+typedef void (*vdj_broadcast_handler)(vdj_t* v, unsigned char* packet, uint16_t packet_length);
+typedef void (*vdj_discovery_handler)(vdj_t* v, unsigned char* packet, uint16_t packet_length);
 
 
 // allocs
-vdj_t* vdj_init_iface(char* interface, unsigned int flags);
-vdj_t* vdj_init(unsigned char* mac, char* ip_address, struct sockaddr_in* ip_addr, struct sockaddr_in* netmask, struct sockaddr_in *broadcast_addr, unsigned int flags);
+vdj_t* vdj_init(uint32_t flags);
+vdj_t* vdj_init_iface(char* interface, uint32_t flags);
+vdj_t* vdj_init_net(unsigned char* mac, char* ip_address, struct sockaddr_in* ip_addr, struct sockaddr_in* netmask, struct sockaddr_in *broadcast_addr, uint32_t flags);
 int vdj_destroy(vdj_t* v);
 
 void vdj_load_player_id(vdj_t* v);
@@ -112,9 +119,9 @@ void vdj_print_sockaddr(char* context, struct sockaddr_in* ip);
 void vdj_send_keepalive(vdj_t* v);
 
 // sendto on different sockets and ports
-int vdj_sendto_discovery(vdj_t* v, unsigned char* packet, int packet_length);
-int vdj_sendto_broadcast(vdj_t* v, unsigned char* packet, int packet_length);
-int vdj_sendto_update(vdj_t* v, struct sockaddr_in* dest, unsigned char* packet, int packet_length);
+int vdj_sendto_discovery(vdj_t* v, unsigned char* packet, uint16_t packet_length);
+int vdj_sendto_broadcast(vdj_t* v, unsigned char* packet, uint16_t packet_length);
+int vdj_sendto_update(vdj_t* v, struct sockaddr_in* dest, unsigned char* packet, uint16_t packet_length);
 
 // internal threads
 
@@ -146,7 +153,7 @@ void vdj_broadcast_beat(vdj_t* v, unsigned char bar_pos);
 
 vdj_link_member_t* vdj_get_link_member(vdj_t* v, unsigned char player_id);
 vdj_link_member_t* vdj_new_link_member(vdj_t* v, cdj_discovery_packet_t* d_pkt);
-struct sockaddr_in* vdj_alloc_dest_addr(vdj_link_member_t* m, int port);
+struct sockaddr_in* vdj_alloc_dest_addr(vdj_link_member_t* m, uint16_t port);
 unsigned char vdj_link_member_count(vdj_t* v);
 
 #endif /* _VDJ_H_INCLUDED_ */

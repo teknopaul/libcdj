@@ -1,4 +1,5 @@
 
+#include <inttypes.h>
 #include <net/if.h>
 #include <ifaddrs.h>
 #include <netpacket/packet.h>
@@ -11,17 +12,18 @@
 
 int main(int argc, const char *argv[])
 {
-    int n = 99;
+    uint32_t n = 99;
     char master = 0;
 
     unsigned char model = 'X';
     unsigned char bar_pos = 3;
     unsigned char active = 1;
     unsigned int sync_counter = 99;
+    unsigned char member_count = 3;
 
-    printf("%s\n", cdj_state_to_emoji(CDJ_PLAY_STATE_PLAY | CDJ_PLAY_STATE_MASTER | CDJ_PLAY_STATE_SYNC | CDJ_PLAY_STATE_ONAIR));
-    printf("%s\n", cdj_state_to_chars(CDJ_PLAY_STATE_PLAY | CDJ_PLAY_STATE_MASTER | CDJ_PLAY_STATE_SYNC | CDJ_PLAY_STATE_ONAIR));
-    printf("%s\n", cdj_state_to_term(CDJ_PLAY_STATE_PLAY | CDJ_PLAY_STATE_MASTER | CDJ_PLAY_STATE_SYNC | CDJ_PLAY_STATE_ONAIR));
+    printf("%s\n", cdj_flags_to_emoji(CDJ_STAT_FLAG_PLAY | CDJ_STAT_FLAG_MASTER | CDJ_STAT_FLAG_SYNC | CDJ_STAT_FLAG_ONAIR));
+    printf("%s\n", cdj_flags_to_chars(CDJ_STAT_FLAG_PLAY | CDJ_STAT_FLAG_MASTER | CDJ_STAT_FLAG_SYNC | CDJ_STAT_FLAG_ONAIR));
+    printf("%s\n", cdj_flags_to_term(CDJ_STAT_FLAG_PLAY | CDJ_STAT_FLAG_MASTER | CDJ_STAT_FLAG_SYNC | CDJ_STAT_FLAG_ONAIR));
     printf("%s\n", cdj_bpm_to_string(120.38));
     printf("%s\n", cdj_bpm_to_string(120.3));
     printf("%s\n", cdj_bpm_to_string(95.35));
@@ -82,7 +84,7 @@ int main(int argc, const char *argv[])
         exit(1);
     }
 
-    int len;
+    uint16_t len;
     unsigned char* packet = cdj_create_initial_discovery_packet(&len, model);
     printf("len=%x initial ", len);
     cdj_print_packet(packet, len, 50000);
@@ -99,7 +101,7 @@ int main(int argc, const char *argv[])
     printf("len=%x id set req ", len);
     cdj_print_packet(packet, len, 50000);
 
-    packet = cdj_create_keepalive_packet(&len, model, ip, mac, player_id);
+    packet = cdj_create_keepalive_packet(&len, model, ip, mac, player_id, member_count);
     printf("len=%x keepalive ", len);
     cdj_print_packet(packet, len, 50000);
 

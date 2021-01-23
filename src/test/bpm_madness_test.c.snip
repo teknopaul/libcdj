@@ -1,0 +1,45 @@
+#include <string.h>
+#include <unistd.h>
+#include <stdlib.h>
+#include <stdio.h>
+#include <inttypes.h>
+
+double cdj_pitch_to_percentage(uint32_t pitch);
+
+//SNIP_FILE SNIP_bpm_madness ../c/cdj.c
+
+#include "snip_core.h"
+
+// run    target/vdj-debug -s -S -K -b   to dump some test data
+
+int main(int argc , char* argv[]) 
+{
+
+	// test case  120.00 track, +5.40% pitch, 126.5 bpm
+	// pitch = 00 10 dd 2f
+	// bpm  = 00 00 2e e0
+
+	double pm1 = cdj_pitch_to_multiplier_bpm((uint32_t) 0x0010dd2f);
+	double pm2 = cdj_pitch_to_multiplier((uint32_t) 0x0010dd2f);
+	snip_assert("pitch understanding", pm1  * 100 == pm2);
+
+	printf("%i int=%f\n", 0x0010dd2f, cdj_pitch_to_multiplier(0x0010dd2f));
+	printf("%i int=%f\n", 0x0008030a, cdj_pitch_to_multiplier(0x0008030a));
+	printf("%i int=%f\n", 0x00100000, cdj_pitch_to_multiplier(0x00100000));
+	printf("%i int=%f\n", 0x00200000, cdj_pitch_to_multiplier(0x00200000));
+
+	printf(" pm1=%f pm2=%f \n", pm1 * 100, pm2);
+	printf(" bpm1=%f bpm2=%f \n", 0x2ee0 * pm1, (0x2ee0 /100.0) * pm2);
+
+
+	printf("%+5.2f%% \n", cdj_pitch_to_percentage(0x0010dd2f));
+	printf("%+5.2f%% \n", cdj_pitch_to_percentage(0x0010dd2f));
+	printf("%+5.2f%% \n", cdj_pitch_to_percentage(0x000ff1a9));
+	printf("%s \n", cdj_pitch_to_string(0x000ff1a9));
+
+	snip_assert("pitch string", strcmp("+5.40%", (const char*) cdj_pitch_to_string(0x000ff1a9)) == 0);
+
+	return 0;
+}
+
+

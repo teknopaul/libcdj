@@ -22,7 +22,7 @@ static void vdj_usage()
     exit(0);
 }
 
-static void vdj_main_discovery_handler(vdj_t* v, unsigned char* packet, int len)
+static void vdj_main_discovery_handler(vdj_t* v, unsigned char* packet, uint16_t len)
 {
     cdj_discovery_packet_t* d_pkt = cdj_new_discovery_packet(packet, len);
     if ( d_pkt &&
@@ -41,7 +41,7 @@ static void vdj_main_discovery_handler(vdj_t* v, unsigned char* packet, int len)
     }
 }
 
-static void vdj_main_update_handler(vdj_t* v, unsigned char* packet, int len)
+static void vdj_main_update_handler(vdj_t* v, unsigned char* packet, uint16_t len)
 {
     cdj_cdj_status_packet_t* cs_pkt = cdj_new_cdj_status_packet(packet, len);
     if ( cs_pkt &&

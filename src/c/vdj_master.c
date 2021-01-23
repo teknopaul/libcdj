@@ -21,13 +21,13 @@ TODO manage v->backline->sync_counter this increments with every handoff
 void
 vdj_request_master(vdj_t* v)
 {
-    int length;
+    uint16_t length;
     vdj_link_member_t* m;
     struct sockaddr_in* dest;
 
     unsigned char master_id = v->backline->master_id;
 
-    /* TODO only do ths when we have backline info coorect
+    /* TODO only do ths when we have backline info correct
     if(! master_id) {
         v->backline->master_id = v->player_id;
         v->backline->master_bpm = v->bpm;
@@ -56,7 +56,7 @@ vdj_request_master(vdj_t* v)
 void
 vdj_update_new_master(vdj_t* v, unsigned char new_master_id)
 {
-        int i;
+    int i;
     vdj_link_member_t* m;
     if (new_master_id) {
         if (v->player_id == new_master_id) { // thats me!
