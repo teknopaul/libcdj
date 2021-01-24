@@ -49,6 +49,10 @@ Too many cool tricks are possible with this lib to list them all here, but to wh
 
 Naturally you can also sync music software running on your PC to decks, and decks to software on your PC.
 
+Alsa DJ is a tool that allows syncing midi equipment to CDJs, and allows the DJ to manually control the sync as well.
+
+![alsa dj ui](doc/screen-ani.gif)
+
 
 ## Developer Docs
 
