@@ -103,8 +103,10 @@ vdj_exec_discovery(vdj_t* v)
         return CDJ_ERROR;
     }
 
-    v->player_id = 1;
-    vdj_load_player_id(v);
+    if (v->auto_id) {
+        v->player_id = 1;
+        vdj_load_player_id(v);
+    }
 
     // CDJ_DISCOVERY
     unsigned char* packet = cdj_create_initial_discovery_packet(&length, v->model);
@@ -179,7 +181,7 @@ vdj_exec_discovery(vdj_t* v)
 
 
 static void*
-vdj_keepalive_loop(void* arg)
+vdj_managed_discovery_loop(void* arg)
 {
     vdj_thread_info* tinfo = arg;
     vdj_discovery_handler discovery_handler = tinfo->handler;
@@ -233,14 +235,15 @@ vdj_keepalive_loop(void* arg)
     return NULL;
 }
 
+
 void
-vdj_stop_keepalive_thread()
+vdj_stop_managed_discovery_thread()
 {
     vdj_keepalive_running = 0;
 }
 
 int
-vdj_init_keepalive_thread(vdj_t* v, vdj_discovery_handler discovery_handler)
+vdj_init_managed_discovery_thread(vdj_t* v, vdj_discovery_handler discovery_handler)
 {
     unsigned char packet[1500];
 
@@ -255,10 +258,43 @@ vdj_init_keepalive_thread(vdj_t* v, vdj_discovery_handler discovery_handler)
     vdj_thread_info* tinfo = (vdj_thread_info*) calloc(1, sizeof(vdj_thread_info));
     tinfo->v = v;
     tinfo->handler = discovery_handler;
-    return pthread_create(&thread_id, NULL, &vdj_keepalive_loop, tinfo);
+    return pthread_create(&thread_id, NULL, &vdj_managed_discovery_loop, tinfo);
 }
 
 
+// unmanaged, N.B. keepalive message will have wrong member count
+static void*
+vdj_keepalive_loop(void* arg)
+{
+    vdj_t* v = arg;
+
+    vdj_keepalive_running = 1;
+    while (vdj_keepalive_running) {
+
+        usleep(CDJ_KEEPALIVE_INTERVAL * 1000);
+
+        vdj_send_keepalive(v);
+
+    }
+
+    return NULL;
+}
+
+void
+vdj_stop_keepalive_thread()
+{
+    vdj_keepalive_running = 0;
+}
+
+int
+vdj_init_keepalive_thread(vdj_t* v)
+{
+    if (vdj_keepalive_running) return CDJ_ERROR;
+    vdj_keepalive_running = 1;
+
+    pthread_t thread_id;
+    return pthread_create(&thread_id, NULL, &vdj_keepalive_loop, v);
+}
 
 // handle discovery of other link members,
 // this occupies recv on the discovery_socket_fd

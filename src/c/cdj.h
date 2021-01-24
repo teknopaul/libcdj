@@ -85,8 +85,8 @@
 #define CDJ_STAT_SLOT_RB        0x04 // rekordbox
 
 // cdj_status_master_state() flags  02 master but no beat grid
-#define CDJ_MASTER_STATE_ON     0x00
-#define CDJ_MASTER_STATE_OFF    0x01
+#define CDJ_MASTER_STATE_OFF    0x00
+#define CDJ_MASTER_STATE_ON     0x01
 #define CDJ_MASTER_STATE_KO     0x02
 
 // bit masks for the nexus statues

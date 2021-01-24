@@ -43,16 +43,16 @@ unsigned char id_map[127];
 int next_slot = 1;
 
 static void
-init_ui(unsigned char player_id, char* model_name)
+init_ui(unsigned char player_id, char* model_name, uint32_t ip)
 {
-    tui_cdj_init(id_map[player_id], player_id, model_name);
+    tui_cdj_init(id_map[player_id], player_id, model_name, ip);
 }
 
 static void
 update_ui(unsigned char player_id, unsigned char beat, float bpm)
 {
     char data[2048];
-    snprintf(data, 2047, "[%02i] %i %06.2fbpm", player_id, beat, bpm);
+    snprintf(data, 2047, "%i %06.2fbpm", beat, bpm);
     tui_cdj_update(id_map[player_id], data);
 }
 
@@ -157,7 +157,7 @@ handle_discovery_datagram(unsigned char* packet, uint16_t len)
                 slot = next_slot++;
                 model = cdj_model_name(packet, len, CDJ_DISCOVERY_PORT);
                 if (model) {
-                    init_ui(d_pkt->player_id, model);
+                    init_ui(d_pkt->player_id, model, d_pkt->ip);
                     free(model);
                 }
             }

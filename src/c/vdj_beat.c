@@ -7,8 +7,8 @@
 
 /**
  * Code to send out Beats according to the VDJ's current bpm.
- * Use for testing untill integrated with midi or a different time source.
- * THis code just ticks at a constant BPM..
+ * Use for testing until integrated with midi or a different time source.
+ * This code just ticks at a constant BPM.
  */
 
 static unsigned _Atomic vdj_beat_running = ATOMIC_VAR_INIT(0);

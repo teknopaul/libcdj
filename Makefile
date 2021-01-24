@@ -16,9 +16,9 @@ LIBVDJ_DEP = src/c/vdj.c src/c/vdj.h
 VDJ_SRC = src/c/vdj.c
 VDJ_DEP = src/c/vdj.c src/c/vdj.h
 
-OBJS = target/cdj.o target/vdj_store.o target/vdj_net.o target/vdj_beat.o target/vdj_master.o target/vdj_discovery.o target/vdj.o
+OBJS = target/cdj.o target/vdj_store.o target/vdj_net.o target/vdj_beat.o target/vdj_master.o target/vdj_discovery.o target/vdj_simple.o target/vdj.o
 
-all: target target/libcdj.a target/libcdj.so target/libvdj.a target/libvdj.so target/cdj-mon target/vdj-mon target/vdj-debug target/vdj
+all: target target/libcdj.so target/libvdj.so target/cdj-mon target/vdj-mon target/vdj-debug target/vdj
 
 target:
 	mkdir -p target
@@ -65,6 +65,9 @@ target/vdj_discovery.o: src/c/vdj_discovery.c src/c/vdj_discovery.h
 target/vdj_store.o: src/c/vdj_store.c src/c/vdj_store.h
 	$(CC) $(CFLAGS) src/c/vdj_store.c -c -o $@
 
+target/vdj_simple.o: src/c/vdj_simple.c src/c/vdj_simple.h
+	$(CC) $(CFLAGS) src/c/vdj_simple.c -c -o $@
+
 target/vdj.o: $(VDJ_DEP)
 	$(CC) $(CFLAGS) $(VDJ_SRC) -c -o $@
 
@@ -74,19 +77,36 @@ target/cdj_mon.o: src/c/cdj_mon.c src/c/cdj_mon_tui.c
 target/cdj.o: $(LIBCDJ_DEP)
 	$(CC) $(CFLAGS) $(LIBCDJ_SRC) -c -o $@
 
-target/libcdj.so: $(LIBCDJ_DEP)
-	$(CC) $(CFLAGS) -shared -rdynamic -o $@ $(LIBCDJ_SRC)
-
-target/libcdj.a: $(LIBCDJ_DEP)
-	$(CC) $(CFLAGS) -c -o $@ $(LIBCDJ_SRC)
+target/libcdj.so: $(LIBCDJ_DEP) $(OBJS)
+	$(CC) $(CFLAGS) -shared -rdynamic -o $@ $(OBJS)
 
 target/libvdj.so: $(OBJS) $(LIBVDJ_DEP)
 	$(CC) $(CFLAGS) -shared -rdynamic -o $@ $(LIBVDJ_SRC)
 
-target/libvdj.a: $(OBJS) $(LIBVDJ_DEP)
-	$(CC) $(CFLAGS) -c -o $@ $(LIBVDJ_SRC)
-
 .PHONY: clean install uninstall deb test
+
+rpc:
+	cd src/x; rpcgen -Sc mount.x
+	cd src/x; rpcgen nfs.x
+	cd src/x; $(CC) -fPIC -DPIC -Wall -c mount_clnt.c
+	cd src/x; $(CC) -fPIC -DPIC -Wall -c nfs_clnt.c
+
+	# hack 
+	# multiple definitions of `xdr_FHandle', so had to manually ahack the following
+	#cd src/x; $(CC) -fPIC -DPIC -Wall -c mount_xdr.c
+	#cd src/x; $(CC) -fPIC -DPIC -Wall -c nfs_xdr.c
+
+	cd src/x; $(CC) -fPIC -DPIC -Wall -c xdr.c
+
+rpc-list:
+	cd src/x; $(CC) -fPIC -DPIC -Wall -c vdj_list_exports.c
+	cd src/x; $(CC) -fPIC -DPIC -Wall -o list-exports xdr.o mount_clnt.o nfs_clnt.o vdj_list_exports.o
+	src/x/list-exports 192.168.1.59
+
+rpc-readdir:
+	cd src/x; $(CC) -fPIC -DPIC -Wall -c vdj_nfs_explore.c
+	cd src/x; $(CC) -fPIC -DPIC -Wall -o read-dir xdr.o mount_clnt.o nfs_clnt.o vdj_nfs_explore.o
+	src/x/read-dir 192.168.1.59
 
 test:
 	mkdir -p target/
@@ -97,17 +117,20 @@ test:
 
 clean:
 	rm -rf target/
+	rm -f src/test/*.o
 
 install:
 	cp target/libcdj.so target/libvdj.so /usr/lib/x86_64-linux-gnu/
 	mkdir -p /usr/include/cdj
 	cp src/c/*.h  /usr/include/cdj
-	cp target/{vdj-mon,cdj-mon} /usr/bin
+	cp target/vdj-mon /usr/bin
+	cp target/cdj-mon /usr/bin
 
 uninstall:
 	rm -f /usr/lib/x86_64-linux-gnu/libcdj.so /usr/lib/x86_64-linux-gnu/libvdj.so
 	rm -rf /usr/include/cdj
-	rm /usr/bin/{vdj-mon,cdj-mon}
+	rm /usr/bin/vdj-mon
+	rm /usr/bin/cdj-mon
 
 deb:
 	sudo deploy/build-deb.sh

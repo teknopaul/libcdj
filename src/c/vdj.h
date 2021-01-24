@@ -31,6 +31,7 @@ typedef struct {
     unsigned char       player_id;     // id of the device
     struct sockaddr_in* mip_addr;      // ip address of the device for dm
     float               bpm;           // calculated bpm, based on bpm reported in a beat message (2 decimal places)
+    int32_t             pitch;         // slider amount (tempo not necessarily pitch)
     time_t              last_keepalive;// last time we heard from this player, rekordbox disconnects after 7 seconds
     unsigned char       active;        // device thinks its active
     unsigned char       master_state;  // sync mater state
@@ -70,17 +71,18 @@ typedef struct {
     unsigned char       model;          // CDJ_VDJ CDJ_XDJ or CDJ_CDJ
     unsigned char       player_id;      // player id 1 to 4 for CDJs rekordbox is 17, we use 5 by default
     unsigned char       device_type;    // device type
-    unsigned char       active;         // device thinks its active, we chose this to also mean playing but there are other states
-    unsigned char       bar_pos;        // 0 index position in the bar
-    unsigned int        auto_id:1;      // automatically assign id
-    unsigned int        have_id:1;      // automatically assign id
+    int                 refs;           // todo referrence counting
 
     // state
+    vdj_backline_t*     backline;       // info we have about other CDJs on the DJ Pro Link
     uint32_t            status_counter; // how many status packets have been sent
     unsigned char       master;         // I think i am master
     unsigned char       master_req;     // this player wants to be master
     float               bpm;            // my virtual device's bpm
-    vdj_backline_t*     backline;       // info we have about other CDJs on the DJ Pro Link
+    unsigned char       active;         // device thinks its active, we chose this to also mean playing but there are other states
+    unsigned char       bar_pos;        // 0 index position in the bar
+    unsigned int        auto_id:1;      // automatically assign id
+    unsigned int        have_id:1;      // automatically assign id
 
 } vdj_t;
 

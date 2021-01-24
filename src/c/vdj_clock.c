@@ -14,12 +14,11 @@
 
 
 /**
- * Monitor app that creates a VDJ an joins the prolink network, this requires an  player_id, n.b. max 4 on the lan.
+ * App that creates a VDJ an joins the prolink network and ticks away beats at constant BPM.
  *
- * This is an example of using the api where we recieve only interesting packets.
+ * Used to test syncing CDJ's to the computer.
  */
 
-static void handle_discovery_packet(vdj_t* v, unsigned char* packet, uint16_t length);
 static void handle_update_packet(vdj_t* v, unsigned char* packet, uint16_t length);
 
 static void signal_exit(int sig)
@@ -44,21 +43,21 @@ unsigned char id_map[127];
 int next_slot = 1;
 
 static void
-init_ui(unsigned char player_id, char* model_name, uint32_t ip)
+init_ui(unsigned char player_id, char* model_name)
 {
-    tui_cdj_init(id_map[player_id], player_id, model_name, ip);
+    tui_cdj_init(id_map[player_id], player_id, model_name);
 }
 
 static void
 update_ui(unsigned char player_id, float bpm, char* emojis)
 {
     char data[2048];
-    snprintf(data, 2047, "%s %06.2fbpm", emojis, bpm);
+    snprintf(data, 2047, "[%02i] %s %06.2fbpm", player_id, emojis, bpm);
     tui_cdj_update(id_map[player_id], data);
 }
 
 /**
- * VDJ monitor tool
+ * VDJ beat clock tool
  */
 int main (int argc, char* argv[])
 {
@@ -119,7 +118,7 @@ int main (int argc, char* argv[])
     }
 
     // as long as we send keepalive packets we will get status packets
-    if ( vdj_init_managed_discovery_thread(v, handle_discovery_packet) != CDJ_OK ) {
+    if ( vdj_init_keepalive_thread(v, NULL) != CDJ_OK ) {
         fprintf(stderr, "error: init keepalive thread\n");
         vdj_destroy(v);
         return 1;
@@ -160,7 +159,7 @@ handle_discovery_packet(vdj_t* v, unsigned char* packet, uint16_t length)
                 slot = next_slot++;
                 model = cdj_model_name(packet, length, CDJ_DISCOVERY_PORT);
                 if (model) {
-                    init_ui(d_pkt->player_id, model, d_pkt->ip);
+                    init_ui(d_pkt->player_id, model);
                     free(model);
                 }
             }

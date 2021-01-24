@@ -8,13 +8,13 @@
 
 To switch master the following is needed
 
+- need to be sending beats
 - If there is no master I just become it
 - Find out who is the current master
 - send a cdj_create_master_request_packet() to port 50001 of the current master
 - expect a response on 50001
 - when current master's status packet Mh says your own player_id you can assert this in your own status packets
-
-TODO manage v->backline->sync_counter this increments with every handoff
+- manage v->backline->sync_counter this increments with every handoff
 
 */
 

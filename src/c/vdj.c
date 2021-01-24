@@ -844,9 +844,15 @@ vdj_handle_managed_update_datagram(vdj_t* v, vdj_update_handler update_handler, 
             if ( (m = vdj_get_link_member(v, cs_pkt->player_id)) ) {
                 // update link master 
                 vdj_update_new_master(v, cdj_status_new_master(cs_pkt));
-
+                m->bpm = cs_pkt->bpm;
                 m->last_keepalive = time(NULL);
                 m->known = 1;
+                m->active = cdj_status_active(cs_pkt);
+                m->master_state = cdj_status_master_state(cs_pkt);
+                m->pitch = cdj_status_pitch(cs_pkt);
+                if (m->master_state == CDJ_MASTER_STATE_ON) {
+                    v->backline->master_id = cs_pkt->player_id;
+                }
             }
             unsigned int sync_counter = cdj_status_sync_counter(cs_pkt);
             if ( sync_counter > v->backline->sync_counter ) {

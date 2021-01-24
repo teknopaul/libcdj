@@ -12,6 +12,11 @@
 #include "vdj_net.h"
 #include "vdj_discovery.h"
 
+/**
+ * Debug tool, carefull this code does not behave like a well mannered CDJ, it does not necessarily maintain the 
+ * member count for example so XDJs will always complain about its prescence on the network in the form of id_use packets.
+ */
+
 static void handle_discovery_datagram(vdj_t* v, unsigned char* packet, uint16_t len);
 static void handle_update_datagram(unsigned char* packet, uint16_t len);
 static void handle_broadcast_datagram(unsigned char* packet, uint16_t len);
@@ -143,7 +148,7 @@ int main (int argc, char* argv[])
 
     //printf("\nFINISHED DISCOVERY FINAL PLAYER ID: %i\n\n", v->player_id);
 
-    if ( ! suppress_keepalive && vdj_init_keepalive_thread(v, NULL) != CDJ_OK ) {
+    if ( ! suppress_keepalive && vdj_init_keepalive_thread(v) != CDJ_OK ) {
         fprintf(stderr, "error: init keepalive thread\n");
         vdj_destroy(v);
         return 1;

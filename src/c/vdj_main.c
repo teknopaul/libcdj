@@ -8,12 +8,17 @@
 #include "vdj_beat.h"
 #include "vdj_discovery.h"
 
+/**
+ * This app does nothing other than join the ProLink networks as a player and tries to be
+ * as correct as possible in the protocol.
+ */
 
 static void vdj_usage()
 {
     printf("options:\n");
     printf("    -i - network interface to use, required if pc has more than one\n");
     printf("    -p - player id (use one that no CDJ is currently displaying)\n");
+    printf("    -a - auto assign player number\n");
     printf("    -c - mimic CDJ-1000\n");
     printf("    -x - mimic XDJ-1000\n");
     printf("    -b - bpm, if set vdj broadcasts beat info\n");
@@ -60,7 +65,7 @@ static void vdj_main_update_handler(vdj_t* v, unsigned char* packet, uint16_t le
 int main(int argc, char *argv[])
 {
     unsigned int flags = 0;
-    unsigned char player_id;
+    unsigned char player_id = 0;
     char* iface = NULL;
     float bpm = 0.0;
     char master = 0;
@@ -69,7 +74,7 @@ int main(int argc, char *argv[])
     // likely to have wifi and LAN for CDJs at home
     // TODO likely not to have DHCPd in a club
     int c;
-    while ( ( c = getopt(argc, argv, "p:i:b:hmxcM") ) != EOF) {
+    while ( ( c = getopt(argc, argv, "p:i:b:hamxcM") ) != EOF) {
         switch (c) {
             case 'h':
                 vdj_usage();
@@ -86,6 +91,9 @@ int main(int argc, char *argv[])
             case 'M':
                 master = 1;
                 break;
+            case 'a':
+                flags |= VDJ_FLAG_AUTO_ID;
+                break;
             case 'p':
                 player_id = atoi(optarg);
                 if (player_id < 0xf) flags |= player_id;
@@ -96,6 +104,7 @@ int main(int argc, char *argv[])
         }
     }
 
+    if (player_id == 0) flags |= VDJ_FLAG_AUTO_ID;
     /**
      * init the vdj
      */
@@ -121,7 +130,7 @@ int main(int argc, char *argv[])
 
     sleep(1);
 
-    if ( vdj_init_keepalive_thread(v, vdj_main_discovery_handler) != CDJ_OK ) {
+    if ( vdj_init_managed_discovery_thread(v, vdj_main_discovery_handler) != CDJ_OK ) {
         fprintf(stderr, "error: init managed discovery thread\n");
         sleep(1);
         vdj_destroy(v);
