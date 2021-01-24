@@ -121,7 +121,7 @@ char*
 cdj_pitch_to_string(uint32_t pitch)
 {
     char* pitch_s = calloc(1, 24);
-    if (pitch_s) printf(pitch_s, "%+5.2f%%", cdj_pitch_to_percentage(pitch));
+    if (pitch_s) snprintf(pitch_s, 23, "%+5.2f%%", cdj_pitch_to_percentage(pitch));
     return pitch_s;
 }
 //SNIP_bpm_madness

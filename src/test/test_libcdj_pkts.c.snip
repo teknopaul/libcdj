@@ -6,25 +6,12 @@
 #include <netinet/in.h>
 
 #include "cdj.h"
-
-
-
-static unsigned char*
-load_packet(char* name)
-{
-    if ( (p = fopen(name, "r")) ) {
-        char str[1500 * 3];
-        if ( fgets(str, 3, p) ) {
-            unsigned char pid = atoi(str);
-            if (pid > 0 && pid < 5) v->player_id = pid;
-        }
-        fclose(p);
-    }
-}
-
+#include "libdump.h"
 
 int main(int argc, const char *argv[])
 {
+    uint16_t len;
+
     int n = 99;
     char master = 0;
 
@@ -42,7 +29,16 @@ int main(int argc, const char *argv[])
     unsigned char ip[4];
     int ret = cdj_ip_format(TEST_IP, ip);
 
-    int len;
+
+    packet = cdj_create_keepalive_packet(&len, model, ip, mac, player_id, member_count);
+    printf("len=%x keepalive ", len);
+    cdj_print_packet(packet, len, 50000);
+
+    char* dump = dump_load("./keep-alive.dump", NULL, dlen),
+    dump_eq("keep-alive", dump, packet);
+
+
+
     unsigned char* packet = cdj_create_initial_discovery_packet(&len, model);
     printf("len=%x initial ", len);
     cdj_print_packet(packet, len, 50000);
@@ -59,9 +55,6 @@ int main(int argc, const char *argv[])
     printf("len=%x id set req ", len);
     cdj_print_packet(packet, len, 50000);
 
-    packet = cdj_create_keepalive_packet(&len, model, ip, mac, player_id, member_count);
-    printf("len=%x keepalive ", len);
-    cdj_print_packet(packet, len, 50000);
 
     packet = cdj_create_beat_packet(&len, model, player_id, 120.00, 3);
     printf("len=%x beat ", len);

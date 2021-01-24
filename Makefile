@@ -92,6 +92,8 @@ test:
 	mkdir -p target/
 	$(CC) -Wall -Isrc/c -o target/libcdj_test src/test/test_libcdj.c target/libcdj.a
 	target/libcdj_test
+	sniprun src/test/libcdj_pkts_test.c.snip
+	sniprun src/test/bpm_madness_test.c.snip
 
 clean:
 	rm -rf target/

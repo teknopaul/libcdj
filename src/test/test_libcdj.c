@@ -84,39 +84,6 @@ int main(int argc, const char *argv[])
         exit(1);
     }
 
-    uint16_t len;
-    unsigned char* packet = cdj_create_initial_discovery_packet(&len, model);
-    printf("len=%x initial ", len);
-    cdj_print_packet(packet, len, 50000);
-
-    packet = cdj_create_stage1_discovery_packet(&len, model, mac, 1);
-    printf("len=%x stage1 ", len);
-    cdj_print_packet(packet, len, 50000);
-
-    packet = cdj_create_id_use_req_packet(&len, model, ip, mac, player_id, 1);
-    printf("len=%x id use req ", len);
-    cdj_print_packet(packet, len, 50000);
-
-    packet = cdj_create_id_set_req_packet(&len, model, player_id, 1);
-    printf("len=%x id set req ", len);
-    cdj_print_packet(packet, len, 50000);
-
-    packet = cdj_create_keepalive_packet(&len, model, ip, mac, player_id, member_count);
-    printf("len=%x keepalive ", len);
-    cdj_print_packet(packet, len, 50000);
-
-    packet = cdj_create_beat_packet(&len, model, player_id, 120.00, 3);
-    printf("len=%x beat ", len);
-    cdj_print_packet(packet, len, 50001);
-
-
-    packet = cdj_create_status_packet(&len, model, player_id,
-        120.00, bar_pos, active, master, sync_counter, 
-        n);
-    printf("len=%x status ", len);
-    cdj_print_packet(packet, len, 50001);
-
-
     // BPM stuff
 
     float c_bpm = cdj_calculated_bpm(12000, 0x00000000);
