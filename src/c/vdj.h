@@ -10,7 +10,7 @@
 #define VDJ_OK          0
 #define VDJ_ERROR       1
 
-#define VDJ_MAX_BACKLINE         32   // max devices on the link we can handle, also highes player_id
+#define VDJ_MAX_BACKLINE         32   // max devices on the link we can handle, also highest player_id
 #define VDJ_DEVICE_TYPE          CDJ_DEV_TYPE_CDJ  // 1
 
 
@@ -33,6 +33,8 @@ typedef struct {
     float               bpm;           // calculated bpm, based on bpm reported in a beat message (2 decimal places)
     int32_t             pitch;         // slider amount (tempo not necessarily pitch)
     time_t              last_keepalive;// last time we heard from this player, rekordbox disconnects after 7 seconds
+    struct timespec     last_beat;     // nanosecond time of last beat
+    unsigned char       bar_pos;
     unsigned char       active;        // device thinks its active
     unsigned char       master_state;  // sync mater state
     unsigned char       play_state;    // all the flags sent on a status packet
@@ -75,10 +77,14 @@ typedef struct {
 
     // state
     vdj_backline_t*     backline;       // info we have about other CDJs on the DJ Pro Link
+    void*               client;         // in anyone want to hook to our callbacks
+    int32_t             pitch;          // (tempo not necessarily pitch)
+    unsigned char       master_state;   // my own state flags
     uint32_t            status_counter; // how many status packets have been sent
     unsigned char       master;         // I think i am master
     unsigned char       master_req;     // this player wants to be master
     float               bpm;            // my virtual device's bpm
+    struct timespec     last_beat;      // nanosecond time of my last beat
     unsigned char       active;         // device thinks its active, we chose this to also mean playing but there are other states
     unsigned char       bar_pos;        // 0 index position in the bar
     unsigned int        auto_id:1;      // automatically assign id
@@ -145,6 +151,9 @@ void vdj_stop_status_thread(vdj_t* v);
 int vdj_init_managed_update_thread(vdj_t* v, vdj_update_handler update_handler);
 void vdj_stop_managed_update_thread(vdj_t* v);
 
+int vdj_init_managegd_broadcast_thread(vdj_t* v, vdj_broadcast_handler broadcast_handler);
+void vdj_stop_managegd_broadcast_thread(vdj_t* v);
+
 void vdj_stop_threads(vdj_t* v);
 
 
@@ -157,5 +166,6 @@ vdj_link_member_t* vdj_get_link_member(vdj_t* v, unsigned char player_id);
 vdj_link_member_t* vdj_new_link_member(vdj_t* v, cdj_discovery_packet_t* d_pkt);
 struct sockaddr_in* vdj_alloc_dest_addr(vdj_link_member_t* m, uint16_t port);
 unsigned char vdj_link_member_count(vdj_t* v);
+int64_t vdj_time_diff(vdj_t* v, vdj_link_member_t* m);
 
 #endif /* _VDJ_H_INCLUDED_ */

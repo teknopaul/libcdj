@@ -21,6 +21,7 @@
 #include <pthread.h>
 #include <stdatomic.h>
 #include <errno.h>
+#include <time.h>
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <sys/types.h>
@@ -65,6 +66,7 @@ static int vdj_get_network_details(char* iface, unsigned char** local_mac, char*
 static void* vdj_discovery_loop(void* arg);
 
 static void vdj_handle_managed_update_datagram(vdj_t* v, vdj_update_handler update_handler, unsigned char* packet, uint16_t len);
+static void vdj_handle_managed_broadcast_datagram(vdj_t* v, vdj_broadcast_handler broadcast_handler, unsigned char* packet, uint16_t len);
 
 /**
  * Initialise Virtual CDJ, this tries to guess the NIC by looking for one that is a physical device, not wireless, and not the loopback interface.
@@ -148,6 +150,7 @@ vdj_init_net(unsigned char* mac, char* ip_address, struct sockaddr_in* ip_addr, 
             printf("vdj: %s/%s\n", ip_address, mac_s);
         }
         v->status_counter = 1;
+        v->pitch = 0x00100000;
 
         v->backline = (vdj_backline_t*) calloc(1, sizeof(vdj_backline_t));
 
@@ -317,11 +320,13 @@ void
 vdj_broadcast_beat(vdj_t* v, unsigned char bar_pos)
 {
     uint16_t length;
+    v->bar_pos = bar_pos;
     unsigned char* packet = cdj_create_beat_packet(&length, v->model, v->player_id, v->bpm, bar_pos);
     if (packet) {
         vdj_sendto_broadcast(v, packet, length);
         free(packet);
     }
+    clock_gettime(CLOCK_MONOTONIC, &v->last_beat);
 }
 
 // networks methods
@@ -732,10 +737,82 @@ vdj_init_broadcast_thread(vdj_t* v, vdj_broadcast_handler broadcast_handler)
     tinfo->handler = broadcast_handler;
     return pthread_create(&thread_id, NULL, &broadcast_loop, tinfo);
 }
+
 void
 vdj_stop_broadcast_thread(vdj_t* v)
 {
     vdj_broadcast_running = 0;
+}
+
+
+static void*
+vdj_managed_broadcast_loop(void* arg)
+{
+    vdj_thread_info* tinfo = arg;
+    vdj_broadcast_handler broadcast_handler = tinfo->handler;
+    vdj_t* v = tinfo->v;
+
+    ssize_t len;
+    unsigned char packet[1500];
+
+    vdj_broadcast_running = 1;
+    while (vdj_broadcast_running) {
+        len = recv(tinfo->v->broadcast_socket_fd, packet, 1500, 0);
+        if (len == -1) {
+            fprintf(stderr, "error: socket read '%s'", strerror(errno));
+            return NULL;
+        } else {
+            if ( ! cdj_validate_header(packet, len) ) {
+                vdj_handle_managed_broadcast_datagram(v, broadcast_handler, packet, len);
+            }
+        }
+    }
+    return NULL;
+}
+
+int
+vdj_init_managegd_broadcast_thread(vdj_t* v, vdj_broadcast_handler broadcast_handler)
+{
+    pthread_t thread_id;
+    vdj_thread_info* tinfo = (vdj_thread_info*) calloc(1, sizeof(vdj_thread_info));
+    tinfo->v = v;
+    tinfo->handler = broadcast_handler;
+    return pthread_create(&thread_id, NULL, &vdj_managed_broadcast_loop, tinfo);
+}
+void
+vdj_stop_managegd_broadcast_thread(vdj_t* v)
+{
+    vdj_broadcast_running = 0;
+}
+
+
+static void
+vdj_handle_managed_broadcast_datagram(vdj_t* v, vdj_broadcast_handler broadcast_handler, unsigned char* packet, uint16_t len)
+{
+    unsigned char type = cdj_packet_type(packet, len);
+    cdj_beat_packet_t* b_pkt;
+    vdj_link_member_t* m;
+
+    switch (type) {
+
+        case CDJ_BEAT : {
+
+            b_pkt = cdj_new_beat_packet(packet, len);
+            if (!b_pkt) {
+                return;
+            }
+
+            if ( (m = vdj_get_link_member(v, b_pkt->player_id)) ) {
+                m->bpm = b_pkt->bpm;
+                clock_gettime(CLOCK_MONOTONIC, &m->last_beat);
+            }
+            // optionally chain the handler so that client code can also react to client updates
+            if (broadcast_handler) broadcast_handler(v, packet, len);
+            free(b_pkt);
+            break;
+        }
+
+    }
 }
 
 
@@ -918,3 +995,24 @@ vdj_link_member_count(vdj_t* v)
     }
     return c;
 }
+
+
+//SNIP_time_diff
+/**
+ * return time diff between our last beat and theirs as recorded on this machine.
+ * only works at all if we have beats coming from both and managed threads.
+ * max value is +250ms and min value is -250ms, which is ~one a beat at 240bpm
+ * and 1/2 of a beat at 120, any further out and DJ is probably mixing on the half beats.
+ * @return  a positive value if we are ahead, negative if we are behind.
+ */
+int64_t
+vdj_time_diff(vdj_t* v, vdj_link_member_t* m)
+{
+    struct timespec me = v->last_beat;
+    struct timespec you = m->last_beat;
+
+    // +ve if you > me
+    int64_t diff =  (you.tv_sec * 1000 + you.tv_nsec / 1000000) - (me.tv_sec * 1000 + me.tv_nsec / 1000000);
+    return (diff >= -250 && diff <= 250) ? diff : 0;
+}
+//SNIP_time_diff

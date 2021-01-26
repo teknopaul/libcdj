@@ -1192,7 +1192,6 @@ cdj_print_packet(unsigned char* packet, uint16_t length, uint16_t port)
     char* s = str;
 
     for (i = 0; i < length; i++) {
-        //if (i == hdr_len ) *s++ = '\n';
         if (i > 0 && (i % 16 == 0)) *s++ = '\n';
         if (i < 10 || (i >= hdr_len && i < hdr_len + CDJ_DEVICE_MODEL_LENGTH) ) {
             s += snprintf(s, 4, "%c_ ", packet[i] ? packet[i] : '_');
