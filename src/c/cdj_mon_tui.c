@@ -41,7 +41,7 @@ static char* fixed_length(char* string, int len);
 static void tui_init(int y);
 static void tui_exit();
 static void tui_text_at(char* string, int x, int y);
-static void tui_cdj_init(int slot, unsigned char player_id, char* model_name, uint32_t ip);
+static void tui_cdj_init(int slot, uint8_t player_id, char* model_name, uint32_t ip);
 static void tui_cdj_update(int pos, char* data);
 static int tui_get_width();
 static int tui_get_height();
@@ -52,15 +52,19 @@ static void tui_cursor_off();
 static void tui_cursor_on();
 
 
-static void tui_cdj_init(int slot, unsigned char player_id, char* model_name, uint32_t ip)
+static void tui_cdj_init(int slot, uint8_t player_id, char* model_name, uint32_t ip)
 {
     if (slot > tui_get_height()) return;
+    char* model;
 
     tui_set_cursor_pos(2, slot);
     tui_delete_line();
     putc('[', stdout);
     fputs(TUI_BOLD, stdout);
-    fputs(fixed_length(model_name, 20), stdout);
+    if ( (model = fixed_length(model_name, 20)) ) {
+        fputs(model, stdout);
+        free(model);
+    }
     fputs(TUI_NORMAL, stdout);
     putc(']', stdout);
     printf(" [%i.%i.%i.%i] [%02i]", 
@@ -115,6 +119,7 @@ static dim tui_translate(int x, int y)
     return rv;
 }
 
+//mallocs
 static char* crop(char* string, int max_len)
 {
     char* new_string = malloc(max_len + 1);

@@ -14,25 +14,26 @@ int main(int argc, const char* argv[])
 {
     uint16_t len;
     ssize_t d_len;
-    unsigned char* packet;
+    uint8_t* packet;
     
     int n = 99;
     char master = 0;
+    int8_t new_master = -1;
     unsigned char model = 'X';
-    unsigned char bar_pos = 3;
-    unsigned char active = 1;
-    unsigned int sync_counter = 99;
-    unsigned char member_count = 3;
-    unsigned char mac[6] = { 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, };
-    unsigned char player_id = 5;
+    uint8_t bar_pos = 3;
+    uint8_t active = 1;
+    uint32_t sync_counter = 99;
+    uint8_t member_count = 3;
+    uint8_t mac[6] = { 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, };
+    uint8_t player_id = 5;
 
     const char* test_ip = "192.168.1.33";
-    unsigned char ip[4];
+    uint8_t ip[4];
     cdj_ip_format(test_ip, ip);
 
     packet = cdj_create_keepalive_packet(&len, model, ip, mac, player_id, member_count);
     //cdj_print_packet(packet, len, 50000);
-    unsigned char* dump = dump_load("./cdj-keep-alive.dump", NULL, &d_len);
+    uint8_t* dump = dump_load("./cdj-keep-alive.dump", NULL, &d_len);
     dump_eq("keep-alive", dump, d_len, packet, len);
 
 
@@ -64,7 +65,7 @@ int main(int argc, const char* argv[])
 
 
     packet = cdj_create_status_packet(&len, model, player_id,
-        120.00, bar_pos, active, master, sync_counter, 
+        120.00, bar_pos, active, master, new_master, sync_counter, 
         n);
     if ( ! dump_cmp("cdj-status.dump", packet, len) ) {
         cdj_print_packet(packet, len, 50001);

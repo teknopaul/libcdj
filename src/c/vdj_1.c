@@ -7,10 +7,10 @@
 #include "vdj_net.h"
 #include "vdj_beatout.h"
 #include "vdj_discovery.h"
+#include "vdj_pselect.h"
 
 /**
- * This app does nothing other than join the ProLink networks as a player and tries to be
- * as correct as possible in the protocol.
+ * This app uses a single thread (vdj_pselect.h) for all I/O
  */
 
 static void
@@ -28,31 +28,6 @@ vdj_usage()
     exit(0);
 }
 
-static void
-vdj_main_discovery_ph(vdj_t* v, cdj_discovery_packet_t* d_pkt)
-{
-    char ip_s[INET_ADDRSTRLEN];
-
-    if ( d_pkt->player_id && v->backline->link_members[d_pkt->player_id] ) {
-        
-        struct sockaddr_in* ip_addr = v->backline->link_members[d_pkt->player_id]->ip_addr;
-        if (ip_addr) {
-            inet_ntop(AF_INET, &ip_addr->sin_addr.s_addr, ip_s, INET_ADDRSTRLEN);
-            printf("link member: %02i [%s] %s\n", d_pkt->player_id, cdj_discovery_model(d_pkt), ip_s);
-        }
-    }
-}
-
-static void
-vdj_main_update_ph(vdj_t* v, cdj_cdj_status_packet_t* cs_pkt)
-{
-    if ( cs_pkt->player_id && v->backline->link_members[cs_pkt->player_id] ) {
-        if ( cdj_status_counter(cs_pkt) % 8 == 0) {
-            printf("link member: %02i alive\n", cs_pkt->player_id);
-        }
-    }
-}
-
 /**
  * Virtual CDJ application entry point.
  */
@@ -61,7 +36,7 @@ int main(int argc, char *argv[])
     unsigned int flags = 0;
     uint8_t player_id = 0;
     char* iface = NULL;
-    float bpm = 0.0;
+    float bpm = 120.0;
     char master = 0;
 
     // we need to know which interface to use
@@ -122,27 +97,10 @@ int main(int argc, char *argv[])
         return 1;
     }
 
-    sleep(1);
+    printf("became link member as player %02i\n", v->player_id);
 
-    if ( vdj_init_managed_discovery_thread(v, vdj_main_discovery_ph) != CDJ_OK ) {
-        fprintf(stderr, "error: init managed discovery thread\n");
-        sleep(1);
-        vdj_destroy(v);
-        return 1;
-    }
-
-    // TODO init these before the discovery
-    sleep(2);
-    if ( vdj_init_managed_update_thread(v, vdj_main_update_ph) != CDJ_OK ) {
-        fprintf(stderr, "error: init managed update thread\n");
-        sleep(1);
-        vdj_destroy(v);
-        return 1;
-    }
-
-    if ( vdj_init_status_thread(v) != CDJ_OK ) {
-        fprintf(stderr, "error: init status thread\n");
-        sleep(1);
+    if ( vdj_pselect_init(v, NULL, NULL, NULL, NULL, NULL) != CDJ_OK) {
+        fprintf(stderr, "error: pselect initialization\n");
         vdj_destroy(v);
         return 1;
     }
@@ -150,7 +108,8 @@ int main(int argc, char *argv[])
     if ( bpm > 0.0 ) {
         if ( vdj_init_beatout_thread(v) != CDJ_OK )  {
             fprintf(stderr, "error: init beatout thread\n");
-            sleep(1);
+            vdj_pselect_stop(v);
+            usleep(100000);
             vdj_destroy(v);
             return 1;
        }

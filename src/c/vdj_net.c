@@ -121,7 +121,7 @@ vdj_find_ip(const char* iface, struct sockaddr_in* addr, struct sockaddr_in* net
  * get the mac addres of an interface
  */
 int
-vdj_get_mac_addr(const char* iface, unsigned char* mac)
+vdj_get_mac_addr(const char* iface, uint8_t* mac)
 {
     struct ifaddrs *addrs, *tmp;
 
@@ -148,7 +148,7 @@ vdj_get_mac_addr(const char* iface, unsigned char* mac)
 }
 
 void
-vdj_mac_addr_to_string(unsigned char* mac, char* mac_string)
+vdj_mac_addr_to_string(uint8_t* mac, char* mac_string)
 {
     int i;
 

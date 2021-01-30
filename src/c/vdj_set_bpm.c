@@ -24,7 +24,7 @@ static void vdj_usage()
 int main(int argc, char *argv[])
 {
     unsigned int flags = VDJ_FLAG_DEV_XDJ;
-    unsigned char player_id;
+    uint8_t player_id;
     char* iface = NULL;
     float bpm = 0.0;
 

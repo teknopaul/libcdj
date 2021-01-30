@@ -19,8 +19,8 @@
  * This is an example of using the api where we recieve only interesting packets.
  */
 
-static void handle_discovery_packet(vdj_t* v, unsigned char* packet, uint16_t length);
-static void handle_update_packet(vdj_t* v, unsigned char* packet, uint16_t length);
+static void discovery_ph(vdj_t* v, cdj_discovery_packet_t* d_pkt);
+static void update_ph(vdj_t* v, cdj_cdj_status_packet_t* cs_pkt);
 
 static void signal_exit(int sig)
 {
@@ -40,17 +40,17 @@ static void usage()
 }
 
 // posisitons on screen for discovered players, mixers and rekordbox instances
-unsigned char id_map[127];
+uint8_t id_map[127];
 int next_slot = 1;
 
 static void
-init_ui(unsigned char player_id, char* model_name, uint32_t ip)
+init_ui(uint8_t player_id, char* model_name, uint32_t ip)
 {
     tui_cdj_init(id_map[player_id], player_id, model_name, ip);
 }
 
 static void
-update_ui(unsigned char player_id, float bpm, char* emojis)
+update_ui(uint8_t player_id, float bpm, char* emojis)
 {
     char data[2048];
     snprintf(data, 2047, "%s %06.2fbpm", emojis, bpm);
@@ -64,8 +64,8 @@ int main (int argc, char* argv[])
 {
     char title[128];
     char* iface = NULL;
-    unsigned int flags = 0;
-    unsigned char player_id;
+    uint32_t flags = 0;
+    uint8_t player_id;
     memset(id_map, 0, 127);
 
     int c;
@@ -119,14 +119,14 @@ int main (int argc, char* argv[])
     }
 
     // as long as we send keepalive packets we will get status packets
-    if ( vdj_init_managed_discovery_thread(v, handle_discovery_packet) != CDJ_OK ) {
+    if ( vdj_init_managed_discovery_thread(v, discovery_ph) != CDJ_OK ) {
         fprintf(stderr, "error: init keepalive thread\n");
         vdj_destroy(v);
         return 1;
     }
 
     // because we are on the network we should get update from other CDJs
-    if ( vdj_init_update_thread(v, handle_update_packet) != CDJ_OK ) {
+    if ( vdj_init_managed_update_thread(v, update_ph) != CDJ_OK ) {
         fprintf(stderr, "error: init update thread\n");
         vdj_destroy(v);
         return 1;
@@ -142,50 +142,32 @@ int main (int argc, char* argv[])
     return 0;
 }
 
+
 static void
-handle_discovery_packet(vdj_t* v, unsigned char* packet, uint16_t length)
+discovery_ph(vdj_t* v, cdj_discovery_packet_t* d_pkt)
 {
-    cdj_discovery_packet_t* d_pkt;
-    char* model;
-
-    if ( cdj_packet_type(packet, length) == CDJ_KEEP_ALIVE ) {
-
-        d_pkt = cdj_new_discovery_packet(packet, length);
-        if (d_pkt) {
-            int slot = id_map[d_pkt->player_id];
-            //tui_set_cursor_pos(0, 0);
-            //printf("slot: %i pid=%i pid=%i", slot, d_pkt->player_id, packet[0x24]);
-            if (slot == 0) {
-                id_map[d_pkt->player_id] = next_slot;
-                slot = next_slot++;
-                model = cdj_model_name(packet, length, CDJ_DISCOVERY_PORT);
-                if (model) {
-                    init_ui(d_pkt->player_id, model, d_pkt->ip);
-                    free(model);
-                }
-            }
-            free(d_pkt);
+    if ( d_pkt->type == CDJ_KEEP_ALIVE ) {
+        int slot = id_map[d_pkt->player_id];
+        //tui_set_cursor_pos(0, 0);
+        //printf("slot: %i pid=%i pid=%i", slot, d_pkt->player_id, packet[0x24]);
+        if (slot == 0) {
+            id_map[d_pkt->player_id] = next_slot;
+            slot = next_slot++;
+            init_ui(d_pkt->player_id, cdj_discovery_model(d_pkt), d_pkt->ip);
         }
-
     }
 }
 
 static void
-handle_update_packet(vdj_t* v, unsigned char* packet, uint16_t length)
+update_ph(vdj_t* v, cdj_cdj_status_packet_t* cs_pkt)
 {
-    cdj_cdj_status_packet_t* cs_pkt = cdj_new_cdj_status_packet(packet, length);
-    if (cs_pkt) {
-        if (id_map[cs_pkt->player_id]) {
-            char* emojis = cdj_flags_to_emoji(cs_pkt->flags);
-            if (emojis) {
-                update_ui(cs_pkt->player_id, cs_pkt->bpm, emojis);
-                free(emojis);
-            }
-            else {
+    char* emojis;
 
-            }
+    if (id_map[cs_pkt->player_id]) {
+        if ( (emojis = cdj_flags_to_emoji(cs_pkt->flags)) ) {
+            update_ui(cs_pkt->player_id, cs_pkt->bpm, emojis);
+            free(emojis);
         }
-        free(cs_pkt);
     }
 }
 

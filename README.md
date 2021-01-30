@@ -83,8 +83,8 @@ To process the message a struct should be created with some of the common data a
         // or call cdj_discovery_*(d_pkt) methods to extract data you want
         // d_pkt->type defines which type of message it was,e.g. CDJ_KEEP_ALIVE 0x06
         // check cdh.h structs to see what else is automatically parsed from the message
+        free(d_pkt);
     }
-    free(d_pkt);
 
 To understand what each message does, check DeepSymetry's packet analysis that describes each message in all the detail we know.
 
@@ -104,7 +104,7 @@ e.g.
 
     sendto(sock, packet, len, 0, (struct sockaddr*) &dest, sizeof(struct sockaddr_in));
 
-The function ``]cdj_print_packet()` prints a packet to stdout for inspection in a format compatible with DeepSymetry's docs.
+The function `cdj_print_packet()` prints a packet to stdout for inspection in a format compatible with DeepSymetry's docs.
 
 N.B. `libvdj` provides sockets and a higher level api. If you want to do your own socket handling and threading, you can just use functions from `libcdj`.
 

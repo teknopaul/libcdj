@@ -16,14 +16,14 @@
  * can be run at the same time as sarting and stopping another local VDJ.
  * If binding to port 50002 were added that would not be possible.
  *
- * This is an example of using only libvdj's socket and directly handlilng Pro Link messages.
+ * This is an example of using only libvdj's socket and directly handling Pro Link messages.
  * i.e. this is the lower level api.  We have recv() methods in this application.
  */
 
-static void handle_discovery_datagram(unsigned char* packet, uint16_t len);
-static void handle_broadcast_datagram(unsigned char* packet, uint16_t len);
+static void handle_discovery_datagram(uint8_t* packet, uint16_t len);
+static void handle_beat_datagram(uint8_t* packet, uint16_t len);
 static void* cdj_monitor_discoverys(void* arg);
-static void* cdj_monitor_broadcasts(void* arg);
+static void* cdj_monitor_beats(void* arg);
 
 static void signal_exit(int sig)
 {
@@ -39,17 +39,17 @@ static void usage()
 }
 
 // posisitons on screen for discovered players, mixers and rekordbox instances
-unsigned char id_map[127];
+uint8_t id_map[127];
 int next_slot = 1;
 
 static void
-init_ui(unsigned char player_id, char* model_name, uint32_t ip)
+init_ui(uint8_t player_id, char* model_name, uint32_t ip)
 {
     tui_cdj_init(id_map[player_id], player_id, model_name, ip);
 }
 
 static void
-update_ui(unsigned char player_id, unsigned char beat, float bpm)
+update_ui(uint8_t player_id, uint8_t beat, float bpm)
 {
     char data[2048];
     snprintf(data, 2047, "%i %06.2fbpm", beat, bpm);
@@ -105,7 +105,7 @@ int main (int argc, char* argv[])
 
     pthread_t thread_id;
     pthread_create(&thread_id, NULL, *cdj_monitor_discoverys, v);
-    pthread_create(&thread_id, NULL, *cdj_monitor_broadcasts, v);
+    pthread_create(&thread_id, NULL, *cdj_monitor_beats, v);
 
     while (1) sleep(1);
 
@@ -118,7 +118,7 @@ cdj_monitor_discoverys(void* arg)
     vdj_t* v = arg;
     int socket;
     ssize_t len;
-    unsigned char packet[1500];
+    uint8_t packet[1500];
 
     socket = v->discovery_socket_fd;
 
@@ -140,26 +140,20 @@ cdj_monitor_discoverys(void* arg)
 }
 
 static void
-handle_discovery_datagram(unsigned char* packet, uint16_t len)
+handle_discovery_datagram(uint8_t* packet, uint16_t len)
 {
     cdj_discovery_packet_t* d_pkt;
-    char* model;
 
     if ( cdj_packet_type(packet, len) == CDJ_KEEP_ALIVE ) {
 
-        d_pkt = cdj_new_discovery_packet(packet, len);
-        if (d_pkt) {
+        if ( (d_pkt = cdj_new_discovery_packet(packet, len)) ) {
             int slot = id_map[d_pkt->player_id];
             //tui_set_cursor_pos(0, 0);
             //printf("  slot: %i pid=%i pid=%i", slot, d_pkt->player_id, packet[0x24]);
             if (slot == 0) {
                 id_map[d_pkt->player_id] = next_slot;
                 slot = next_slot++;
-                model = cdj_model_name(packet, len, CDJ_DISCOVERY_PORT);
-                if (model) {
-                    init_ui(d_pkt->player_id, model, d_pkt->ip);
-                    free(model);
-                }
+                init_ui(d_pkt->player_id, cdj_discovery_model(d_pkt), d_pkt->ip);
             }
             free(d_pkt);
         }
@@ -169,14 +163,14 @@ handle_discovery_datagram(unsigned char* packet, uint16_t len)
 
 
 static void*
-cdj_monitor_broadcasts(void* arg)
+cdj_monitor_beats(void* arg)
 {
     vdj_t* v = arg;
     int socket;
     ssize_t len;
-    unsigned char packet[1500];
+    uint8_t packet[1500];
 
-    socket = v->broadcast_socket_fd;
+    socket = v->beat_socket_fd;
 
     while (1) {
         len = recv(socket, packet, 1500, 0);
@@ -184,7 +178,7 @@ cdj_monitor_broadcasts(void* arg)
             fprintf(stderr, "socket read error: %s", strerror(errno));
             return NULL;
         } else {
-            handle_broadcast_datagram(packet, len);
+            handle_beat_datagram(packet, len);
         }
     }
 
@@ -192,20 +186,19 @@ cdj_monitor_broadcasts(void* arg)
 }
 
 static void
-handle_broadcast_datagram(unsigned char* packet, uint16_t len)
+handle_beat_datagram(uint8_t* packet, uint16_t len)
 {
+    cdj_beat_packet_t* b_pkt;
     if ( cdj_packet_type(packet, len) == CDJ_BEAT ) {
 
-        cdj_beat_packet_t* b_pkt = cdj_new_beat_packet(packet, len);
-        //tui_set_cursor_pos(0, 0);
-        //printf("  beat: %i pid=%i pid=%i", id_map[b_pkt->player_id], b_pkt->player_id, packet[0x21]);
-        if (b_pkt && id_map[b_pkt->player_id]) {
-
-            update_ui(b_pkt->player_id, b_pkt->bar_pos, b_pkt->bpm);
-
+        if ( (b_pkt = cdj_new_beat_packet(packet, len)) ) {
+            //tui_set_cursor_pos(0, 0);
+            //printf("  beat: %i pid=%i pid=%i", id_map[b_pkt->player_id], b_pkt->player_id, packet[0x21]);
+            if (id_map[b_pkt->player_id]) {
+                update_ui(b_pkt->player_id, b_pkt->bar_pos, b_pkt->bpm);
+            }
+            free(b_pkt);
         }
-        free(b_pkt);
-
     }
 }
 

@@ -16,9 +16,12 @@ LIBVDJ_DEP = src/c/vdj.c src/c/vdj.h
 VDJ_SRC = src/c/vdj.c
 VDJ_DEP = src/c/vdj.c src/c/vdj.h
 
-OBJS = target/cdj.o target/vdj_store.o target/vdj_net.o target/vdj_beat.o target/vdj_master.o target/vdj_discovery.o target/vdj_simple.o target/vdj.o
+OBJS = target/cdj.o target/vdj_store.o target/vdj_net.o target/vdj_beatout.o target/vdj_master.o \
+       target/vdj_discovery.o target/vdj_pselect.o target/vdj_simple.o \
+       target/vdj.o
 
-all: target target/libcdj.so target/libvdj.so target/cdj-mon target/vdj-mon target/vdj-debug target/vdj
+all: target target/libcdj.so target/libvdj.so \
+     target/cdj-mon target/vdj-mon target/vdj-debug target/vdj target/vdj-1
 
 target:
 	mkdir -p target
@@ -37,6 +40,9 @@ target/cdj-mon: $(OBJS) target/cdj_mon.o
 target/vdj-mon: $(OBJS) target/vdj_mon.o
 	$(CC) $(CFLAGS) -o $@ $(OBJS) target/vdj_mon.o -lpthread
 
+target/vdj-1: $(OBJS) target/vdj_1.o
+	$(CC) $(CFLAGS) -o $@ $(OBJS) target/vdj_1.o -lpthread
+
 # Objects
 
 # Each .c is compiled to a .o in target/
@@ -53,8 +59,8 @@ target/vdj_main.o: src/c/vdj_main.c
 target/vdj_net.o: src/c/vdj_net.c src/c/vdj_net.h
 	$(CC) $(CFLAGS) src/c/vdj_net.c -c -o $@
 
-target/vdj_beat.o: src/c/vdj_beat.c src/c/vdj_beat.h
-	$(CC) $(CFLAGS) src/c/vdj_beat.c -c -o $@
+target/vdj_beatout.o: src/c/vdj_beatout.c src/c/vdj_beatout.h
+	$(CC) $(CFLAGS) src/c/vdj_beatout.c -c -o $@
 
 target/vdj_master.o: src/c/vdj_master.c src/c/vdj_master.h
 	$(CC) $(CFLAGS) src/c/vdj_master.c -c -o $@
@@ -62,11 +68,17 @@ target/vdj_master.o: src/c/vdj_master.c src/c/vdj_master.h
 target/vdj_discovery.o: src/c/vdj_discovery.c src/c/vdj_discovery.h
 	$(CC) $(CFLAGS) src/c/vdj_discovery.c -c -o $@
 
+target/vdj_pselect.o: src/c/vdj_pselect.c src/c/vdj_pselect.h
+	$(CC) $(CFLAGS) src/c/vdj_pselect.c -c -o $@
+
 target/vdj_store.o: src/c/vdj_store.c src/c/vdj_store.h
 	$(CC) $(CFLAGS) src/c/vdj_store.c -c -o $@
 
 target/vdj_simple.o: src/c/vdj_simple.c src/c/vdj_simple.h
 	$(CC) $(CFLAGS) src/c/vdj_simple.c -c -o $@
+
+target/vdj_1.o: src/c/vdj_1.c
+	$(CC) $(CFLAGS) src/c/vdj_1.c -c -o $@
 
 target/vdj.o: $(VDJ_DEP)
 	$(CC) $(CFLAGS) $(VDJ_SRC) -c -o $@

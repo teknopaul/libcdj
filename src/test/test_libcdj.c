@@ -96,5 +96,10 @@ int main(int argc, const char *argv[])
     printf("calculated bpm = %f\n", c_bpm);
 
     fprintf(stderr,"ok\n");
+
+    uint8_t byte = 0xff;
+    int8_t sbyte = (int8_t) byte;
+    printf("signed byte %i\n", sbyte);
+
     exit(0);
 }

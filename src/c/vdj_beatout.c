@@ -8,11 +8,11 @@
 /**
  * Code to send out Beats according to the VDJ's current bpm.
  * Use for testing until integrated with midi or a different time source.
- * This code just ticks at a constant BPM.
+ * This code just ticks at a constant BPM, amaking no attempt to prevent drift.
  */
 
-static unsigned _Atomic vdj_beat_running = ATOMIC_VAR_INIT(0);
-static unsigned _Atomic vdj_beat_paused = ATOMIC_VAR_INIT(1);
+static unsigned _Atomic vdj_beatout_running = ATOMIC_VAR_INIT(0);
+static unsigned _Atomic vdj_beatout_paused = ATOMIC_VAR_INIT(1);
 
 static long int 
 vdj_one_beat_nanos(float bpm)
@@ -31,16 +31,16 @@ vdj_one_beat_time(float bpm)
 }
 
 static void*
-vdj_beat_loop(void* arg)
+vdj_beatout_loop(void* arg)
 {
     vdj_t* v = arg;
 
     struct timespec sl;
-    vdj_beat_running = 1;
+    vdj_beatout_running = 1;
     int was_paused = 0;
-    while (vdj_beat_running) {
+    while (vdj_beatout_running) {
 
-        if (vdj_beat_paused) {
+        if (vdj_beatout_paused) {
             was_paused = 1;
             usleep(50000); // todo wake up immediatly
         }
@@ -60,36 +60,35 @@ vdj_beat_loop(void* arg)
 }
 
 int
-vdj_init_beat_thread(vdj_t* v)
+vdj_init_beatout_thread(vdj_t* v)
 {
     pthread_t thread_id;
-    int s = pthread_create(&thread_id, NULL, vdj_beat_loop, v);
+    int s = pthread_create(&thread_id, NULL, vdj_beatout_loop, v);
     if (s != 0) {
         return CDJ_ERROR;
     }
     return CDJ_OK;
 }
 
-
 // kill
 void
-vdj_stop_beat_thread(vdj_t* v)
+vdj_stop_beatout_thread(vdj_t* v)
 {
     v->active = 0;
-    vdj_beat_running = 0;
+    vdj_beatout_running = 0;
 }
 
 
 void
-vdj_start_beat_thread(vdj_t* v)
+vdj_start_beatout_thread(vdj_t* v)
 {
     v->active = 1;
-    vdj_beat_paused = 0;
+    vdj_beatout_paused = 0;
 }
 
 void
-vdj_pause_beat_thread(vdj_t* v)
+vdj_pause_beatout_thread(vdj_t* v)
 {
     v->active = 0;
-    vdj_beat_paused = 1;
+    vdj_beatout_paused = 1;
 }

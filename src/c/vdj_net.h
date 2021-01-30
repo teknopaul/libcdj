@@ -28,7 +28,7 @@ int vdj_find_ip(const char* iface, struct sockaddr_in* addr, struct sockaddr_in*
  * mac - pointer to a char[6] to return the mac address as a number
  * mac_string - if not NULL should be apointer to char[18] to return mac address as a string as well
  */
-int vdj_get_mac_addr(const char* iface, unsigned char* mac);
+int vdj_get_mac_addr(const char* iface, uint8_t* mac);
 
 /**
  * convert char[6] to : separated string
@@ -36,7 +36,7 @@ int vdj_get_mac_addr(const char* iface, unsigned char* mac);
  * mac - pointer to a char[6] to return the mac address as a number
  * mac_string - if not NULL should be apointer to char[18] to return mac address as a string as well
  */
-void vdj_mac_addr_to_string(unsigned char* mac, char* mac_string);
+void vdj_mac_addr_to_string(uint8_t* mac, char* mac_string);
 
 /**
  * list interface names

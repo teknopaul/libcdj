@@ -12,34 +12,34 @@ int main(int argc, const char *argv[])
 {
     uint16_t len;
 
-    int n = 99;
+    uint32_t n = 99;
     char master = 0;
 
     unsigned char model = 'X';
-    unsigned char bar_pos = 3;
-    unsigned char active = 1;
-    unsigned int sync_counter = 99;
-    unsigned char member_count = 3;
-    unsigned char mac[6] = { 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, };
-    unsigned char player_id = 5;
+    uint8_t bar_pos = 3;
+    uint8_t active = 1;
+    uint32_t sync_counter = 99;
+    uint8_t member_count = 3;
+    uint8_t mac[6] = { 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, };
+    uint8_t player_id = 5;
 
     // test cdj_ip_format()
 
     const char* TEST_IP = "253.100.99.1";
-    unsigned char ip[4];
+    uint8_t ip[4];
     int ret = cdj_ip_format(TEST_IP, ip);
 
 
-    packet = cdj_create_keepalive_packet(&len, model, ip, mac, player_id, member_count);
+    uint8_t* packet = cdj_create_keepalive_packet(&len, model, ip, mac, player_id, member_count);
     printf("len=%x keepalive ", len);
     cdj_print_packet(packet, len, 50000);
 
-    char* dump = dump_load("./keep-alive.dump", NULL, dlen),
+    uint8_t* dump = dump_load("./keep-alive.dump", NULL, dlen),
     dump_eq("keep-alive", dump, packet);
 
 
 
-    unsigned char* packet = cdj_create_initial_discovery_packet(&len, model);
+    packet = cdj_create_initial_discovery_packet(&len, model);
     printf("len=%x initial ", len);
     cdj_print_packet(packet, len, 50000);
 

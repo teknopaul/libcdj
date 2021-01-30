@@ -19,7 +19,7 @@
  * Used to test syncing CDJ's to the computer.
  */
 
-static void handle_update_packet(vdj_t* v, unsigned char* packet, uint16_t length);
+static void handle_update_packet(vdj_t* v, uint8_t* packet, uint16_t length);
 
 static void signal_exit(int sig)
 {
@@ -39,17 +39,17 @@ static void usage()
 }
 
 // posisitons on screen for discovered players, mixers and rekordbox instances
-unsigned char id_map[127];
+uint8_t id_map[127];
 int next_slot = 1;
 
 static void
-init_ui(unsigned char player_id, char* model_name)
+init_ui(uint8_t player_id, char* model_name)
 {
     tui_cdj_init(id_map[player_id], player_id, model_name);
 }
 
 static void
-update_ui(unsigned char player_id, float bpm, char* emojis)
+update_ui(uint8_t player_id, float bpm, char* emojis)
 {
     char data[2048];
     snprintf(data, 2047, "[%02i] %s %06.2fbpm", player_id, emojis, bpm);
@@ -64,7 +64,7 @@ int main (int argc, char* argv[])
     char title[128];
     char* iface = NULL;
     unsigned int flags = 0;
-    unsigned char player_id;
+    uint8_t player_id;
     memset(id_map, 0, 127);
 
     int c;
@@ -142,46 +142,36 @@ int main (int argc, char* argv[])
 }
 
 static void
-handle_discovery_packet(vdj_t* v, unsigned char* packet, uint16_t length)
+handle_discovery_packet(vdj_t* v, uint8_t* packet, uint16_t length)
 {
     cdj_discovery_packet_t* d_pkt;
-    char* model;
 
     if ( cdj_packet_type(packet, length) == CDJ_KEEP_ALIVE ) {
 
-        d_pkt = cdj_new_discovery_packet(packet, length);
-        if (d_pkt) {
+        if ( (d_pkt = cdj_new_discovery_packet(packet, length)) ) {
             int slot = id_map[d_pkt->player_id];
             //tui_set_cursor_pos(0, 0);
             //printf("slot: %i pid=%i pid=%i", slot, d_pkt->player_id, packet[0x24]);
             if (slot == 0) {
                 id_map[d_pkt->player_id] = next_slot;
                 slot = next_slot++;
-                model = cdj_model_name(packet, length, CDJ_DISCOVERY_PORT);
-                if (model) {
-                    init_ui(d_pkt->player_id, model);
-                    free(model);
-                }
+                init_ui(d_pkt->player_id, cdj_discovery_model(d_pkt));
             }
             free(d_pkt);
         }
-
     }
 }
 
 static void
-handle_update_packet(vdj_t* v, unsigned char* packet, uint16_t length)
+handle_update_packet(vdj_t* v, uint8_t* packet, uint16_t length)
 {
-    cdj_cdj_status_packet_t* cs_pkt = cdj_new_cdj_status_packet(packet, length);
-    if (cs_pkt) {
+    cdj_cdj_status_packet_t* cs_pkt;
+    char* emojis;
+    if ( (cs_pkt = cdj_new_cdj_status_packet(packet, length)) ) {
         if (id_map[cs_pkt->player_id]) {
-            char* emojis = cdj_flags_to_emoji(cs_pkt->flags);
-            if (emojis) {
+            if ((emojis = cdj_flags_to_emoji(cs_pkt->flags))) {
                 update_ui(cs_pkt->player_id, cs_pkt->bpm, emojis);
                 free(emojis);
-            }
-            else {
-
             }
         }
         free(cs_pkt);

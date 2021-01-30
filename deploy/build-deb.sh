@@ -24,7 +24,6 @@ rm -r $tmp_dir ||:
 mkdir -p \
   $tmp_dir/DEBIAN \
   $tmp_dir/usr/bin \
-  $tmp_dir/usr/lib64 \
   $tmp_dir/usr/lib/x86_64-linux-gnu \
   $tmp_dir/usr/include/cdj
 
@@ -40,10 +39,8 @@ cp --archive \
     $tmp_dir/usr/bin
 
 # libs
-cp --archive target/*.a \
-    $tmp_dir/usr/lib/x86_64-linux-gnu
 cp --archive target/*.so \
-    $tmp_dir/usr/lib64
+    $tmp_dir/usr/lib/x86_64-linux-gnu
 
 # hdrs
 cp --archive src/c/*.h \
@@ -69,7 +66,7 @@ cp --archive -R $project_root/deploy/DEBIAN/p* $tmp_dir/DEBIAN
 # perms
 #
 chown root.root $tmp_dir/usr/bin/* $tmp_dir/usr/lib/x86_64-linux-gnu/*
-chmod 755 $tmp_dir/usr/bin/* /usr/lib/x86_64-linux-gnu
+chmod 755 $tmp_dir/usr/bin/* $tmp_dir/usr/lib/x86_64-linux-gnu
 chmod 644 $tmp_dir/usr/lib/x86_64-linux-gnu/*
 
 #

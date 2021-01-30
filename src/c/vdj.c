@@ -13,7 +13,7 @@
  * Pioneer send from ip:any   to broadcast:50001
  *         send from ip:50000 to broadcast:50000 
  *
- * we seond from the same sockes we listen from
+ * we send from the same sockets we listen to
  * 
  * @autho teknopaul
  */
@@ -37,7 +37,7 @@
 #include "vdj.h"
 #include "vdj_net.h"
 #include "vdj_store.h"
-#include "vdj_beat.h"
+#include "vdj_beatout.h"
 #include "vdj_master.h"
 #include "vdj_discovery.h"
 
@@ -46,7 +46,7 @@
 
 
 static unsigned _Atomic vdj_discovery_running = ATOMIC_VAR_INIT(0);
-static unsigned _Atomic vdj_broadcast_running = ATOMIC_VAR_INIT(0);
+static unsigned _Atomic vdj_beat_running = ATOMIC_VAR_INIT(0);
 static unsigned _Atomic vdj_update_running = ATOMIC_VAR_INIT(0);    // read other statuses
 static unsigned _Atomic vdj_status_running = ATOMIC_VAR_INIT(0);    // send status
 
@@ -54,19 +54,20 @@ static unsigned _Atomic vdj_status_running = ATOMIC_VAR_INIT(0);    // send stat
 static int vdj_open_discovery_socket(vdj_t* v);
 static int vdj_open_discovery_unicast_socket(vdj_t* v);
 static int vdj_open_update_socket(vdj_t* v);
-static int vdj_open_broadcast_socket(vdj_t* v);
+static int vdj_open_beat_socket(vdj_t* v);
+static int vdj_open_beat_unicast_socket(vdj_t* v);
 static int vdj_open_send_socket(vdj_t* v);
 static int vdj_close_discovery_socket(vdj_t* v);
 static int vdj_close_discovery_unicast_socket(vdj_t* v);
 static int vdj_close_update_socket(vdj_t* v);
-static int vdj_close_broadcast_socket(vdj_t* v);
+static int vdj_close_beat_socket(vdj_t* v);
+static int vdj_close_beat_unicast_socket(vdj_t* v);
 static int vdj_close_send_socket(vdj_t* v);
 static int vdj_get_network_details(char* iface, unsigned char** local_mac, char** ip_address, struct sockaddr_in** ip_addr, struct sockaddr_in** netmask, struct sockaddr_in** broadcast_addr);
 
 static void* vdj_discovery_loop(void* arg);
-
-static void vdj_handle_managed_update_datagram(vdj_t* v, vdj_update_handler update_handler, unsigned char* packet, uint16_t len);
-static void vdj_handle_managed_broadcast_datagram(vdj_t* v, vdj_broadcast_handler broadcast_handler, unsigned char* packet, uint16_t len);
+static void vdj_free_link_member(vdj_link_member_t* m);
+static struct sockaddr_in* vdj_alloc_dest_addr(vdj_link_member_t* m, uint16_t port);
 
 /**
  * Initialise Virtual CDJ, this tries to guess the NIC by looking for one that is a physical device, not wireless, and not the loopback interface.
@@ -151,6 +152,7 @@ vdj_init_net(unsigned char* mac, char* ip_address, struct sockaddr_in* ip_addr, 
         }
         v->status_counter = 1;
         v->pitch = 0x00100000;
+        v->master_req = -1;
 
         v->backline = (vdj_backline_t*) calloc(1, sizeof(vdj_backline_t));
 
@@ -167,16 +169,18 @@ vdj_set_bpm(vdj_t* v, float bpm)
 /**
  * Open the UDP file descriptors for CDJ communication.
  * Does not start listening yet.
+ * returns CDJ_OK if all successed or a bitmask indicating which failed
  */
 int
 vdj_open_sockets(vdj_t* v)
 {
     return (
-        vdj_open_discovery_socket(v) == CDJ_OK &&
-        vdj_open_discovery_unicast_socket(v) == CDJ_OK &&
-        vdj_open_broadcast_socket(v) == CDJ_OK &&
-        vdj_open_update_socket(v) == CDJ_OK &&
-        vdj_open_send_socket(v) == CDJ_OK ) ? CDJ_OK : CDJ_ERROR;
+        vdj_open_discovery_socket(v) &
+        vdj_open_discovery_unicast_socket(v) << 1 &
+        vdj_open_beat_socket(v) << 2 &
+        vdj_open_beat_unicast_socket(v) << 3  &
+        vdj_open_update_socket(v) << 4  &
+        vdj_open_send_socket(v) << 5 );
 }
 
 int
@@ -184,7 +188,7 @@ vdj_open_broadcast_sockets(vdj_t* v)
 {
     return (
         vdj_open_discovery_socket(v) == CDJ_OK &&
-        vdj_open_broadcast_socket(v) == CDJ_OK ) ? CDJ_OK : CDJ_ERROR;
+        vdj_open_beat_socket(v) == CDJ_OK ) ? CDJ_OK : CDJ_ERROR;
 }
 
 /**
@@ -197,12 +201,7 @@ vdj_destroy(vdj_t* v)
     int res = vdj_close_sockets(v);
     if (v->backline) {
         for (i = 0; i < VDJ_MAX_BACKLINE; i++) {
-            if (v->backline->link_members[i]) {
-                if (v->backline->link_members[i]->mip_addr) {
-                    free(v->backline->link_members[i]->mip_addr);
-                }
-            }
-            free(v->backline->link_members[i]);
+            vdj_free_link_member(v->backline->link_members[i]);
         }
         free(v->backline);
     }
@@ -215,16 +214,18 @@ vdj_destroy(vdj_t* v)
 }
 
 /**
- * Closes all network sockets
+ * Closes all network sockets.
+ * returns 0 for all success, or a bit mask of which sockets failed to close
  */
 int
 vdj_close_sockets(vdj_t* v)
 {
     return vdj_close_discovery_socket(v) | 
-        vdj_close_discovery_unicast_socket(v) | 
-        vdj_close_update_socket(v) | 
-        vdj_close_broadcast_socket(v) | 
-        vdj_close_send_socket(v);
+        vdj_close_discovery_unicast_socket(v) << 1 | 
+        vdj_close_update_socket(v) << 2 | 
+        vdj_close_beat_socket(v) << 3 | 
+        vdj_close_beat_unicast_socket(v) << 4 |
+        vdj_close_send_socket(v) << 5;
 }
 
 
@@ -243,36 +244,34 @@ vdj_send_keepalive(vdj_t* v)
     }
 }
 
-// status loop (every 200ms)
+
 int
 vdj_send_status(vdj_t* v)
 {
     uint16_t length;
     int i, rv = CDJ_OK;
     vdj_link_member_t* m;
-    struct sockaddr_in* dest;
 
     if (v->backline) {
         unsigned char* packet = cdj_create_status_packet(&length, v->model, v->player_id, 
-            v->bpm, v->bar_pos, v->active, v->master, v->backline ? v->backline->sync_counter : 1,
+            v->bpm, v->bar_pos, v->active, v->master, v->master_req, v->backline ? v->backline->sync_counter : 1,
             v->status_counter++);
         if (packet == NULL) {
             return CDJ_ERROR;
         }
 
         for ( i = 0; i < VDJ_MAX_BACKLINE; i++) {
-            if ( (m = v->backline->link_members[i]) && m->mip_addr) {
-                dest = vdj_alloc_dest_addr(m, CDJ_UPDATE_PORT);
-                rv |= vdj_sendto_update(v, dest, packet, length);
-                free(dest);
+            if ( (m = v->backline->link_members[i]) && m->ip_addr) {
+                rv |= vdj_sendto_update(v, m->update_addr, packet, length);
                 //printf("update sent to player_id=%02i err=%i len=%i\n", i, rv, length);
             }
         }
-
-        //cdj_print_packet(packet, length, CDJ_UPDATE_PORT);
+        free(packet);
     }
     return rv;
 }
+
+// status loop (every 200ms)
 
 static void*
 vdj_status_loop(void* arg)
@@ -310,7 +309,7 @@ void
 vdj_stop_threads(vdj_t* v)
 {
     vdj_discovery_running = 0;
-    vdj_broadcast_running = 0;
+    vdj_beat_running = 0;
     vdj_update_running = 0;
     vdj_status_running = 0;
     vdj_stop_keepalive_thread();
@@ -320,13 +319,19 @@ void
 vdj_broadcast_beat(vdj_t* v, unsigned char bar_pos)
 {
     uint16_t length;
-    v->bar_pos = bar_pos;
-    unsigned char* packet = cdj_create_beat_packet(&length, v->model, v->player_id, v->bpm, bar_pos);
-    if (packet) {
-        vdj_sendto_broadcast(v, packet, length);
-        free(packet);
+    if (bar_pos) {
+        v->bar_pos = bar_pos;
+    } else {
+        if (++(v->bar_pos) > 4) {
+            v->bar_pos = 1;
+        }
     }
-    clock_gettime(CLOCK_MONOTONIC, &v->last_beat);
+    unsigned char* packet = cdj_create_beat_packet(&length, v->model, v->player_id, v->bpm, v->bar_pos);
+    if (packet) {
+        vdj_sendto_beat(v, packet, length);
+        free(packet);
+        clock_gettime(CLOCK_MONOTONIC, &v->last_beat);
+    }
 }
 
 // networks methods
@@ -339,16 +344,9 @@ vdj_print_sockaddr(char* context, struct sockaddr_in* ip)
     fprintf(stderr, "%s %s:%i\n", context, ip_s, ntohs(ip->sin_port));
 }
 
-struct sockaddr_in*
-vdj_alloc_dest_addr(vdj_link_member_t* m, uint16_t port)
-{
-    struct sockaddr_in* dest = calloc(1, sizeof(struct sockaddr_in));
-    dest->sin_family = AF_INET;
-    dest->sin_addr.s_addr = m->mip_addr->sin_addr.s_addr;
-    dest->sin_port = (in_port_t)htons(port);
-    return dest;
-}
-
+/**
+ * get network details of localhost for the LAN used for CDJs
+ */
 static int
 vdj_get_network_details(char* iface, unsigned char** out_mac, char** out_ip_address, struct sockaddr_in** out_ip_addr, struct sockaddr_in** out_netmask, struct sockaddr_in** out_broadcast_addr)
 {
@@ -419,6 +417,8 @@ vdj_get_network_details(char* iface, unsigned char** out_mac, char** out_ip_addr
  * @param port - local port to bind to
  * @param broadcast - BROADCAST|UNICAST  if BROADCAST set SO_BROADCAST socket option and bind to .255 addr
  * @param socket_fd_out if successfule this is set to the file descriptor
+ *
+ * @return zero for success 1 for error (see vdj_open_sockets())
  */
 static int
 vdj_open_socket(vdj_t* v, int port, int broadcast, int *socket_fd_out)
@@ -490,6 +490,7 @@ vdj_open_socket_out(vdj_t* v, int port, int *socket_fd_out)
     *socket_fd_out = socket_fd;
     return CDJ_OK;
 }
+
 /**
  * Open socket with which to send keep alive packets.
  * Send from v->ip_address:50000 to v->broadcast:50000
@@ -529,6 +530,7 @@ vdj_close_discovery_unicast_socket(vdj_t* v)
     }
     return CDJ_OK;
 }
+
 /**
  * Open socket with which to receive data from other CDJs (v->ip_address:50002)
  */
@@ -549,20 +551,40 @@ vdj_close_update_socket(vdj_t* v)
 }
 
 /**
- * Open socket with which to receive timing packets.
+ * Open socket with which to receive beat packets.
  * Send from v->ip_address:50001 to v->broadcast:50001
  */
 static int
-vdj_open_broadcast_socket(vdj_t* v)
+vdj_open_beat_socket(vdj_t* v)
 {
-    return vdj_open_socket(v, CDJ_BROADCAST_PORT, BROADCAST, &v->broadcast_socket_fd);
+    return vdj_open_socket(v, CDJ_BEAT_PORT, BROADCAST, &v->beat_socket_fd);
 }
 
 static int
-vdj_close_broadcast_socket(vdj_t* v)
+vdj_close_beat_socket(vdj_t* v)
 {
-    if (v->broadcast_socket_fd && close(v->broadcast_socket_fd) ) {
-        fprintf(stderr, "error: broadcast udp socket close '%s'\n", strerror(errno));
+    if (v->beat_socket_fd && close(v->beat_socket_fd) ) {
+        fprintf(stderr, "error: beat udp socket close '%s'\n", strerror(errno));
+        return CDJ_ERROR;
+    }
+    return CDJ_OK;
+}
+
+/**
+ * Open socket with which to receive beat direct message packerts (e.g. master handoff)
+ * Send from ?? to v->unicast:50001
+ */
+static int
+vdj_open_beat_unicast_socket(vdj_t* v)
+{
+    return vdj_open_socket(v, CDJ_BEAT_PORT, UNICAST, &v->beat_unicast_socket_fd);
+}
+
+static int
+vdj_close_beat_unicast_socket(vdj_t* v)
+{
+    if (v->beat_unicast_socket_fd && close(v->beat_unicast_socket_fd) ) {
+        fprintf(stderr, "error: beat unicast udp socket close '%s'\n", strerror(errno));
         return CDJ_ERROR;
     }
     return CDJ_OK;
@@ -614,24 +636,24 @@ vdj_sendto_discovery(vdj_t* v, unsigned char* packet, uint16_t packet_length)
 }
 
 /**
- * send a packet from broadcast_socket_fd to broadcast:50001
+ * send a packet from beat_socket_fd to broadcast:50001
  * used to send out beat timing
  */
 int
-vdj_sendto_broadcast(vdj_t* v, unsigned char* packet, uint16_t packet_length)
+vdj_sendto_beat(vdj_t* v, unsigned char* packet, uint16_t packet_length)
 {
     int flags = 0;
     struct sockaddr_in dest;
 
-    if (v->broadcast_socket_fd == 0) {
+    if (v->beat_socket_fd == 0) {
         fprintf(stderr, "error: socket not open\n");
         return CDJ_ERROR;
     }
 
     memcpy(&dest, v->broadcast_addr, sizeof(struct sockaddr_in));
-    dest.sin_port = (in_port_t)htons(CDJ_BROADCAST_PORT);
+    dest.sin_port = (in_port_t)htons(CDJ_BEAT_PORT);
 
-    int res = sendto(v->broadcast_socket_fd, packet, packet_length, flags, (struct sockaddr*) &dest, sizeof(struct sockaddr_in));
+    int res = sendto(v->beat_socket_fd, packet, packet_length, flags, (struct sockaddr*) &dest, sizeof(struct sockaddr_in));
     if (res == -1) {
         fprintf(stderr, "error: broadcast:50001 'error: '%s'\n", strerror(errno));
         return CDJ_ERROR;
@@ -698,6 +720,7 @@ vdj_init_discovery_thread(vdj_t* v, vdj_discovery_handler discovery_handler)
     tinfo->handler = discovery_handler;
     return pthread_create(&thread_id, NULL, &vdj_discovery_loop, tinfo);
 }
+
 void
 vdj_stop_discovery_thread(vdj_t* v)
 {
@@ -707,63 +730,63 @@ vdj_stop_discovery_thread(vdj_t* v)
 
 
 static void*
-broadcast_loop(void* arg)
+vdj_beat_loop(void* arg)
 {
     vdj_thread_info* tinfo = arg;
-    vdj_broadcast_handler broadcast_handler = tinfo->handler;
+    vdj_beat_handler beat_handler = tinfo->handler;
 
     ssize_t len;
     unsigned char packet[1500];
 
-    vdj_broadcast_running = 1;
-    while (vdj_broadcast_running) {
-        len = recv(tinfo->v->broadcast_socket_fd, packet, 1500, 0);
+    vdj_beat_running = 1;
+    while (vdj_beat_running) {
+        len = recv(tinfo->v->beat_socket_fd, packet, 1500, 0);
         if (len == -1) {
             fprintf(stderr, "error: socket read '%s'", strerror(errno));
             return NULL;
         } else {
-            if ( ! cdj_validate_header(packet, len) ) broadcast_handler(tinfo->v, packet, len);
+            if ( ! cdj_validate_header(packet, len) ) beat_handler(tinfo->v, packet, len);
         }
     }
     return NULL;
 }
 
 int
-vdj_init_broadcast_thread(vdj_t* v, vdj_broadcast_handler broadcast_handler)
+vdj_init_beat_thread(vdj_t* v, vdj_beat_handler beat_handler)
 {
     pthread_t thread_id;
     vdj_thread_info* tinfo = (vdj_thread_info*) calloc(1, sizeof(vdj_thread_info));
     tinfo->v = v;
-    tinfo->handler = broadcast_handler;
-    return pthread_create(&thread_id, NULL, &broadcast_loop, tinfo);
+    tinfo->handler = beat_handler;
+    return pthread_create(&thread_id, NULL, &vdj_beat_loop, tinfo);
 }
 
 void
-vdj_stop_broadcast_thread(vdj_t* v)
+vdj_stop_beat_thread(vdj_t* v)
 {
-    vdj_broadcast_running = 0;
+    vdj_beat_running = 0;
 }
 
 
 static void*
-vdj_managed_broadcast_loop(void* arg)
+vdj_managed_beat_loop(void* arg)
 {
     vdj_thread_info* tinfo = arg;
-    vdj_broadcast_handler broadcast_handler = tinfo->handler;
+    vdj_beat_ph beat_ph = tinfo->handler;
     vdj_t* v = tinfo->v;
 
     ssize_t len;
     unsigned char packet[1500];
 
-    vdj_broadcast_running = 1;
-    while (vdj_broadcast_running) {
-        len = recv(tinfo->v->broadcast_socket_fd, packet, 1500, 0);
+    vdj_beat_running = 1;
+    while (vdj_beat_running) {
+        len = recv(tinfo->v->beat_socket_fd, packet, 1500, 0);
         if (len == -1) {
             fprintf(stderr, "error: socket read '%s'", strerror(errno));
             return NULL;
         } else {
             if ( ! cdj_validate_header(packet, len) ) {
-                vdj_handle_managed_broadcast_datagram(v, broadcast_handler, packet, len);
+                vdj_handle_managed_beat_datagram(v, beat_ph, packet, len);
             }
         }
     }
@@ -771,50 +794,94 @@ vdj_managed_broadcast_loop(void* arg)
 }
 
 int
-vdj_init_managegd_broadcast_thread(vdj_t* v, vdj_broadcast_handler broadcast_handler)
+vdj_init_managed_beat_thread(vdj_t* v, vdj_beat_ph beat_ph)
 {
     pthread_t thread_id;
     vdj_thread_info* tinfo = (vdj_thread_info*) calloc(1, sizeof(vdj_thread_info));
     tinfo->v = v;
-    tinfo->handler = broadcast_handler;
-    return pthread_create(&thread_id, NULL, &vdj_managed_broadcast_loop, tinfo);
+    tinfo->handler = beat_ph;
+    return pthread_create(&thread_id, NULL, &vdj_managed_beat_loop, tinfo);
 }
 void
-vdj_stop_managegd_broadcast_thread(vdj_t* v)
+vdj_stop_managed_beat_thread(vdj_t* v)
 {
-    vdj_broadcast_running = 0;
+    vdj_beat_running = 0;
 }
 
 
-static void
-vdj_handle_managed_broadcast_datagram(vdj_t* v, vdj_broadcast_handler broadcast_handler, unsigned char* packet, uint16_t len)
+void
+vdj_handle_managed_beat_datagram(vdj_t* v, vdj_beat_ph beat_ph, unsigned char* packet, uint16_t len)
 {
     unsigned char type = cdj_packet_type(packet, len);
     cdj_beat_packet_t* b_pkt;
     vdj_link_member_t* m;
 
     switch (type) {
-
         case CDJ_BEAT : {
-
-            b_pkt = cdj_new_beat_packet(packet, len);
-            if (!b_pkt) {
-                return;
+            if ( (b_pkt = cdj_new_beat_packet(packet, len)) ) {
+                if ( (m = vdj_get_link_member(v, b_pkt->player_id)) ) {
+                    m->bpm = b_pkt->bpm;
+                    clock_gettime(CLOCK_MONOTONIC, &m->last_beat);
+                }
+                // optionally chain the handler so that client code can also react to client updates
+                if (beat_ph) beat_ph(v, b_pkt);
+                free(b_pkt);
             }
-
-            if ( (m = vdj_get_link_member(v, b_pkt->player_id)) ) {
-                m->bpm = b_pkt->bpm;
-                clock_gettime(CLOCK_MONOTONIC, &m->last_beat);
-            }
-            // optionally chain the handler so that client code can also react to client updates
-            if (broadcast_handler) broadcast_handler(v, packet, len);
-            free(b_pkt);
             break;
         }
-
     }
 }
 
+
+void
+vdj_handle_managed_beat_unicast_datagram(vdj_t* v, vdj_beat_unicast_ph beat_unicast_ph, unsigned char* packet, uint16_t len)
+{
+    unsigned char type = cdj_packet_type(packet, len);
+    cdj_beat_packet_t* b_pkt;
+    vdj_link_member_t* m;
+    uint16_t length;
+    uint8_t* pkt;
+    struct sockaddr_in* dest;
+
+    switch (type) {
+        case CDJ_MASTER_REQ : {
+            if ( (b_pkt = cdj_new_beat_packet(packet, len)) ) {
+                // if we are master reply OK
+                uint8_t new_master = cdj_beat_master(b_pkt);
+                if (v->master) { // should not get a REQ if we are not
+                    if ( (m = vdj_get_link_member(v, new_master)) ) {
+                        if ( (pkt = cdj_create_master_response_packet(&length, v->model, v->player_id))) {
+                            if ( (dest = vdj_alloc_dest_addr(m, CDJ_BEAT_PORT)) ) {
+                                vdj_sendto_update(v, dest, pkt, length);
+                                free(dest);
+                            }
+                            free(pkt);
+                        }
+                    }
+                }
+                // set the new master flag to idicate we are aware of it
+                // this should be unset by status packets, we are still master
+                v->master_req = new_master;
+                // optionally chain the handler
+                if (beat_unicast_ph) beat_unicast_ph(v, b_pkt);
+                free(b_pkt);
+            }
+            break;
+        }
+        case CDJ_MASTER_RESP : {
+            if ( (b_pkt = cdj_new_beat_packet(packet, len)) ) {
+                // seems this may be ignored and following status packets are used instead
+                // optionally chain the handler
+                if (beat_unicast_ph) beat_unicast_ph(v, b_pkt);
+                free(b_pkt);
+            }
+            break;
+        }
+    }
+}
+
+
+// cleint managed updates
 
 static void*
 vdj_update_loop(void* arg)
@@ -856,14 +923,14 @@ vdj_stop_update_thread(vdj_t* v)
 }
 
 // managed update thread, this handles other CDJ status messages
-// and updates backline state and vdj_t internal satte
+// and updates backline state and vdj_t internal state
 
 static void*
 vdj_managed_update_loop(void* arg)
 {
     vdj_thread_info* tinfo = arg;
     vdj_t* v = tinfo->v;
-    vdj_update_handler update_handler = tinfo->handler;
+    vdj_update_ph update_ph = tinfo->handler;
 
     ssize_t len;
     unsigned char packet[1500];
@@ -875,14 +942,14 @@ vdj_managed_update_loop(void* arg)
             fprintf(stderr, "socket read error: %s", strerror(errno));
             return NULL;
         } else {
-            if ( ! cdj_validate_header(packet, len) ) vdj_handle_managed_update_datagram(v, update_handler, packet, len);
+            if ( ! cdj_validate_header(packet, len) ) vdj_handle_managed_update_datagram(v, update_ph, packet, len);
         }
     }
     return NULL;
 }
 
 int
-vdj_init_managed_update_thread(vdj_t* v, vdj_update_handler update_handler)
+vdj_init_managed_update_thread(vdj_t* v, vdj_update_ph update_ph)
 {
     if (vdj_update_running) return CDJ_ERROR;
 
@@ -894,7 +961,7 @@ vdj_init_managed_update_thread(vdj_t* v, vdj_update_handler update_handler)
     pthread_t thread_id;
     vdj_thread_info* tinfo = (vdj_thread_info*) calloc(1, sizeof(vdj_thread_info));
     tinfo->v = v;
-    tinfo->handler = update_handler;
+    tinfo->handler = update_ph;
     int s = pthread_create(&thread_id, NULL, vdj_managed_update_loop, tinfo);
     if (s != 0) {
         return CDJ_ERROR;
@@ -902,43 +969,46 @@ vdj_init_managed_update_thread(vdj_t* v, vdj_update_handler update_handler)
     return CDJ_OK;
 }
 
-static void
-vdj_handle_managed_update_datagram(vdj_t* v, vdj_update_handler update_handler, unsigned char* packet, uint16_t len)
+void
+vdj_handle_managed_update_datagram(vdj_t* v, vdj_update_ph update_ph, unsigned char* packet, uint16_t len)
 {
     unsigned char type = cdj_packet_type(packet, len);
     cdj_cdj_status_packet_t* cs_pkt;
     vdj_link_member_t* m;
+    uint32_t sync_counter;
 
     switch (type) {
 
         case CDJ_STATUS : {
 
-            cs_pkt = cdj_new_cdj_status_packet(packet, len);
-            if (!cs_pkt) {
-                return;
-            }
-
-            if ( (m = vdj_get_link_member(v, cs_pkt->player_id)) ) {
-                // update link master 
-                vdj_update_new_master(v, cdj_status_new_master(cs_pkt));
-                m->bpm = cs_pkt->bpm;
-                m->last_keepalive = time(NULL);
-                m->known = 1;
-                m->active = cdj_status_active(cs_pkt);
-                m->master_state = cdj_status_master_state(cs_pkt);
-                m->pitch = cdj_status_pitch(cs_pkt);
-                if (m->master_state == CDJ_MASTER_STATE_ON) {
-                    v->backline->master_id = cs_pkt->player_id;
+            if ( (cs_pkt = cdj_new_cdj_status_packet(packet, len)) ) {
+                if ( (m = vdj_get_link_member(v, cs_pkt->player_id)) ) {
+                    sync_counter = cdj_status_sync_counter(cs_pkt);
+                    if ( sync_counter > v->backline->sync_counter ) {
+                        v->backline->sync_counter = sync_counter;
+                    }
+                    // update link master
+                    vdj_update_new_master(v, cdj_status_new_master(cs_pkt));
+                    m->bpm = cs_pkt->bpm;
+                    m->last_keepalive = time(NULL);
+                    m->known = 1;
+                    m->active = cdj_status_active(cs_pkt);
+                    m->master_state = cdj_status_master_state(cs_pkt);
+                    m->pitch = cdj_status_pitch(cs_pkt);
+                    if (m->master_state == CDJ_MASTER_STATE_ON) {
+                        v->backline->master_id = cs_pkt->player_id;
+                    }
+                    // if i was master, and now someone else it
+                    if (v->master && m->master_state) {
+                        v->master = 0;
+                        v->master_req = -1;
+                    }
                 }
-            }
-            unsigned int sync_counter = cdj_status_sync_counter(cs_pkt);
-            if ( sync_counter > v->backline->sync_counter ) {
-                v->backline->sync_counter = sync_counter;
-            }
 
-            // optionally chain the handler so that client code can also react to client updates
-            if (update_handler) update_handler(v, packet, len);
-            free(cs_pkt);
+                // optionally chain the handler so that client code can also react to client updates
+                if (update_ph) update_ph(v, cs_pkt);
+                free(cs_pkt);
+            }
             break;
         }
 
@@ -952,7 +1022,17 @@ vdj_stop_managed_update_thread(vdj_t* v)
 }
 
 
-// backline management TODO new file
+// backline management TODO new file + snip test
+
+static struct sockaddr_in*
+vdj_alloc_dest_addr(vdj_link_member_t* m, uint16_t port)
+{
+    struct sockaddr_in* dest = calloc(1, sizeof(struct sockaddr_in));
+    dest->sin_family = AF_INET;
+    dest->sin_addr.s_addr = m->ip_addr->sin_addr.s_addr;
+    dest->sin_port = (in_port_t)htons(port);
+    return dest;
+}
 
 vdj_link_member_t*
 vdj_get_link_member(vdj_t* v, unsigned char player_id)
@@ -972,7 +1052,8 @@ vdj_new_link_member(vdj_t* v, cdj_discovery_packet_t* d_pkt)
     vdj_link_member_t* m = (vdj_link_member_t*) calloc(1, sizeof(vdj_link_member_t));
     if (m) {
         m->player_id = d_pkt->player_id;
-        m->mip_addr = cdj_ip_decode(d_pkt->ip);
+        m->ip_addr = cdj_ip_decode(d_pkt->ip);
+        m->update_addr = vdj_alloc_dest_addr(m, CDJ_UPDATE_PORT);
         v->backline->link_members[d_pkt->player_id] = m;
         m->active = 1;
     }
@@ -980,7 +1061,27 @@ vdj_new_link_member(vdj_t* v, cdj_discovery_packet_t* d_pkt)
     return m;
 }
 
-// return count excluding ourselves since we may be snooping
+void
+vdj_update_link_member(vdj_link_member_t* m, uint32_t ip)
+{
+    if (m->ip_addr) free(m->ip_addr);
+    if (m->update_addr) free(m->update_addr);
+    m->ip_addr = cdj_ip_decode(ip);
+    m->update_addr = vdj_alloc_dest_addr(m, CDJ_UPDATE_PORT);
+}
+
+// null checking free
+static void
+vdj_free_link_member(vdj_link_member_t* m)
+{
+    if (m) {
+        if (m->ip_addr) free(m->ip_addr);
+        if (m->update_addr) free(m->update_addr);
+        free(m);
+    }
+}
+
+// return count of active members excluding ourselves since we may be snooping
 unsigned char
 vdj_link_member_count(vdj_t* v)
 {
@@ -1000,7 +1101,7 @@ vdj_link_member_count(vdj_t* v)
 //SNIP_time_diff
 /**
  * return time diff between our last beat and theirs as recorded on this machine.
- * only works at all if we have beats coming from both and managed threads.
+ * only returns a useful number at all if we have beats coming from both and managed threads.
  * max value is +250ms and min value is -250ms, which is ~one a beat at 240bpm
  * and 1/2 of a beat at 120, any further out and DJ is probably mixing on the half beats.
  * @return  a positive value if we are ahead, negative if we are behind.
