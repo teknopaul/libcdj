@@ -92,7 +92,7 @@ dump_eq(const char* name, unsigned char* buffer_exp, ssize_t len_exp, unsigned c
 {
     int i;
     if (len_exp != len_act) {
-        fprintf(stderr, "[\x1B[31merror\x1B[0m] %s differ: expected len=%li actual len=%li\n", name, len_exp, len_act);
+        fprintf(stderr, "[\x1B[31merror\x1B[0m] %s differ: expected len=%zi actual len=%zi\n", name, len_exp, len_act);
         return 0;
     }
     for ( i = 0 ; i < len_exp ; i++) {

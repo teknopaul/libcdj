@@ -1,0 +1,13 @@
+#!/bin/bash
+#
+# clean build
+#
+set -e
+
+make clean
+make
+make test
+make deb
+sudo make install
+sudo make uninstall
+sudo dpkg -i target/*.deb

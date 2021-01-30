@@ -288,11 +288,11 @@ double cdj_beat_measured_bpm(cdj_beat_packet_t* b_pkt);
 /**
  * milliseconds to the next beat (excluding pitch) 
  */
-uint32_t cdj_beat_next(cdj_beat_packet_t* cs_pkt);
+uint32_t cdj_beat_next(cdj_beat_packet_t* b_pkt);
 /**
  * player_id extracted form the beat packet
  */
-uint8_t cdj_beat_player_id(cdj_beat_packet_t* cs_pkt);
+uint8_t cdj_beat_player_id(cdj_beat_packet_t* b_pkt);
 /**
  * Position of the beat inthe bar, 1,2 3 or 4, because DJs only play house.
  */

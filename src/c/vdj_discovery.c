@@ -347,6 +347,12 @@ vdj_handle_managed_discovery_datagram(vdj_t* v, vdj_discovery_ph discovery_ph, u
         case CDJ_COLLISION: {
             //fprintf(stderr, "id collision alert\n");
             // TODO ought to restart discovery now
+            if (discovery_ph) {
+                if ( (d_pkt = cdj_new_discovery_packet(packet, len)) ) {
+                    discovery_ph(v, d_pkt);
+                    free(d_pkt);
+                }
+            }
             break;
         }
         case CDJ_ID_SET_REQ: {
@@ -370,10 +376,13 @@ vdj_handle_managed_discovery_datagram(vdj_t* v, vdj_discovery_ph discovery_ph, u
         
             if ( (d_pkt = cdj_new_discovery_packet(packet, len)) ) {
 
-                // ignore messages from self
+                // ignore messages from self (someone else might want it tho (adj does))
                 if (d_pkt->player_id == v->player_id) {
-                    free(d_pkt);
-                    return;
+                    if (discovery_ph) {
+                        discovery_ph(v, d_pkt);
+                        free(d_pkt);
+                        break;
+                    }
                 }
 
                 if (d_pkt->player_id == v->player_id && ! vdj_match_ip(v, d_pkt->ip) ) {
