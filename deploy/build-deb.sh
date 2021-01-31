@@ -13,6 +13,13 @@ test -d target/ || (echo "run make first" && exit 1)
 name=libcdj
 arch=$(uname -m)
 
+if [ $arch == armv6l ] ; then
+  lib_dir=/usr/lib/x86_64-linux-gnu
+elif [ $arch == x86_64 ] ; then
+  lib_dir=/usr/lib
+fi
+
+
 cd $(dirname $0)/..
 project_root=$PWD
 
@@ -24,7 +31,7 @@ rm -r $tmp_dir ||:
 mkdir -p \
   $tmp_dir/DEBIAN \
   $tmp_dir/usr/bin \
-  $tmp_dir/usr/lib/x86_64-linux-gnu \
+  $tmp_dir/$lib_dir \
   $tmp_dir/usr/include/cdj
 
 #
@@ -40,7 +47,7 @@ cp --archive \
 
 # libs
 cp --archive target/*.so \
-    $tmp_dir/usr/lib/x86_64-linux-gnu
+    $tmp_dir/$lib_dir
 
 # hdrs
 cp --archive src/c/*.h \
@@ -65,9 +72,9 @@ cp --archive -R $project_root/deploy/DEBIAN/p* $tmp_dir/DEBIAN
 #
 # perms
 #
-chown root.root $tmp_dir/usr/bin/* $tmp_dir/usr/lib/x86_64-linux-gnu/*
-chmod 755 $tmp_dir/usr/bin/* $tmp_dir/usr/lib/x86_64-linux-gnu
-chmod 644 $tmp_dir/usr/lib/x86_64-linux-gnu/*
+chown root.root $tmp_dir/usr/bin/* $tmp_dir/$lib_dir/*
+chmod 755 $tmp_dir/usr/bin/* $tmp_dir/$lib_dir
+chmod 644 $tmp_dir/$lib_dir/*
 
 #
 # Build the .deb

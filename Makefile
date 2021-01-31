@@ -146,5 +146,18 @@ uninstall:
 	rm /usr/bin/vdj-mon
 	rm /usr/bin/cdj-mon
 
+install-rpi:
+	cp target/libcdj.so target/libvdj.so /usr/lib/
+	mkdir -p /usr/include/cdj
+	cp src/c/*.h  /usr/include/cdj
+	cp target/vdj-mon /usr/bin
+	cp target/cdj-mon /usr/bin
+
+uninstall-rpi:
+	rm -f /usr/lib/libcdj.so /usr/lib/libvdj.so
+	rm -rf /usr/include/cdj
+	rm /usr/bin/vdj-mon
+	rm /usr/bin/cdj-mon
+
 deb:
 	sudo deploy/build-deb.sh
