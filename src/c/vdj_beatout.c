@@ -46,11 +46,11 @@ vdj_beatout_loop(void* arg)
         }
         if (was_paused) {
             was_paused = 0;
-            v->bar_pos = 0;
+            v->bar_index = 0;
         }
 
-        vdj_broadcast_beat(v, v->bar_pos++);
-        if (v->bar_pos == 4) v->bar_pos = 0;
+        vdj_broadcast_beat(v, v->bpm, v->bar_index++);
+        if (v->bar_index == 4) v->bar_index = 0;
 
         sl = vdj_one_beat_time(v->bpm);
         nanosleep(&sl, NULL);

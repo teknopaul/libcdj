@@ -294,13 +294,17 @@ uint32_t cdj_beat_next(cdj_beat_packet_t* b_pkt);
  */
 uint8_t cdj_beat_player_id(cdj_beat_packet_t* b_pkt);
 /**
- * Position of the beat inthe bar, 1,2 3 or 4, because DJs only play house.
+ * Position of the beat in the bar, 1,2 3 or 4, because DJs only play house.
  */
 uint8_t cdj_beat_bar_pos(cdj_beat_packet_t* b_pkt);
 /**
  * new master in a CDJ_MASTER_REQ or CDJ_MASTER_RESP message
  */
 uint8_t cdj_beat_master(cdj_beat_packet_t* b_pkt);
+/**
+ * Seems to return a 1 or 0 in a CDJ_MASTER_RESP
+ */
+uint32_t cdj_beat_master_ok(cdj_beat_packet_t* b_pkt);
 
 // handshake
 uint8_t* cdj_create_initial_discovery_packet(uint16_t* length, unsigned char model);
@@ -317,7 +321,7 @@ uint8_t  cdj_inc_id_use_req_packet(uint8_t* packet);
 void     cdj_mod_id_use_req_packet_player_id(uint8_t* packet, uint8_t player_id);
 uint8_t  cdj_inc_id_set_req_packet(uint8_t* packet);
 
-uint8_t* cdj_create_beat_packet(uint16_t* length, unsigned char model, uint8_t player_id, float bpm, uint8_t bar_pos);
+uint8_t* cdj_create_beat_packet(uint16_t* length, unsigned char model, uint8_t player_id, float bpm, uint8_t bar_index);
 
 uint8_t* cdj_create_status_packet(uint16_t* length, unsigned char model, uint8_t player_id,
     float bpm, uint8_t bar_index, uint8_t active, uint8_t master, int8_t new_master, uint32_t sync_counter,
@@ -330,5 +334,6 @@ uint8_t* cdj_create_master_response_packet(uint16_t* length, unsigned char model
 
 
 void cdj_print_packet(uint8_t* packet, uint16_t length, uint16_t port);
+void cdj_fprint_packet(FILE* f, uint8_t* packet, uint16_t length, uint16_t port);
 
 #endif /* _LIBCDJ_H_INCLUDED_ */

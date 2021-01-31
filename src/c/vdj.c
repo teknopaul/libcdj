@@ -67,7 +67,6 @@ static int vdj_get_network_details(char* iface, unsigned char** local_mac, char*
 
 static void* vdj_discovery_loop(void* arg);
 static void vdj_free_link_member(vdj_link_member_t* m);
-static struct sockaddr_in* vdj_alloc_dest_addr(vdj_link_member_t* m, uint16_t port);
 
 /**
  * Initialise Virtual CDJ, this tries to guess the NIC by looking for one that is a physical device, not wireless, and not the loopback interface.
@@ -237,10 +236,10 @@ vdj_send_keepalive(vdj_t* v)
 {
     uint16_t length;
     // TODO XDJ does not base link member count on keepalives
-    unsigned char* packet = cdj_create_keepalive_packet(&length, v->model, v->ip, v->mac, v->player_id, 1 + vdj_link_member_count(v));
-    if (packet) {
-        vdj_sendto_discovery(v, packet, length);
-        free(packet);
+    unsigned char* pkt = cdj_create_keepalive_packet(&length, v->model, v->ip, v->mac, v->player_id, 1 + vdj_link_member_count(v));
+    if (pkt) {
+        vdj_sendto_discovery(v, pkt, length);
+        free(pkt);
     }
 }
 
@@ -253,20 +252,21 @@ vdj_send_status(vdj_t* v)
     vdj_link_member_t* m;
 
     if (v->backline) {
-        unsigned char* packet = cdj_create_status_packet(&length, v->model, v->player_id, 
-            v->bpm, v->bar_pos, v->active, v->master, v->master_req, v->backline ? v->backline->sync_counter : 1,
+        unsigned char* pkt = cdj_create_status_packet(&length, v->model, v->player_id, 
+            v->bpm, v->bar_index, v->active, v->master, v->master_req, v->backline ? v->backline->sync_counter : 1,
             v->status_counter++);
-        if (packet == NULL) {
+        if (pkt == NULL) {
             return CDJ_ERROR;
         }
 
         for ( i = 0; i < VDJ_MAX_BACKLINE; i++) {
             if ( (m = v->backline->link_members[i]) && m->ip_addr) {
-                rv |= vdj_sendto_update(v, m->update_addr, packet, length);
-                //printf("update sent to player_id=%02i err=%i len=%i\n", i, rv, length);
+                rv |= vdj_sendto_update(v, m->update_addr, pkt, length);
+                fprintf(stderr, "update sent to player_id=%02i err=%i len=%i bpm=%f\n", i, rv, length, v->bpm);
+                //cdj_fprint_packet(stderr, pkt, length, CDJ_STATUS);
             }
         }
-        free(packet);
+        free(pkt);
     }
     return rv;
 }
@@ -316,24 +316,52 @@ vdj_stop_threads(vdj_t* v)
 }
 
 void
-vdj_broadcast_beat(vdj_t* v, unsigned char bar_pos)
+vdj_broadcast_beat(vdj_t* v, float bpm, unsigned char bar_pos)
 {
     uint16_t length;
+    unsigned char* pkt;
+
     if (bar_pos) {
-        v->bar_pos = bar_pos;
+        v->bar_index = bar_pos - 1;
     } else {
-        if (++(v->bar_pos) > 4) {
-            v->bar_pos = 1;
+        if (++(v->bar_index) > 3) {
+            v->bar_index = 0;
         }
     }
-    unsigned char* packet = cdj_create_beat_packet(&length, v->model, v->player_id, v->bpm, v->bar_pos);
-    if (packet) {
-        vdj_sendto_beat(v, packet, length);
-        free(packet);
+
+    v->bpm = bpm;
+
+    if ( (pkt = cdj_create_beat_packet(&length, v->model, v->player_id, v->bpm, v->bar_index)) ) {
+        vdj_sendto_beat(v, pkt, length);
+        free(pkt);
         clock_gettime(CLOCK_MONOTONIC, &v->last_beat);
+        v->active = 1;
     }
 }
 
+void
+vdj_expire_play_state(vdj_t* v)
+{
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    if (v->active && (v->last_beat.tv_sec < now.tv_sec - 1)) {
+        vdj_set_playing(v, 0);
+    }
+}
+
+void
+vdj_set_playing(vdj_t* v, int playing)
+{
+    if (playing) {
+        v->master_state |=  CDJ_STAT_FLAG_PLAY;
+        v->master_state |=  CDJ_STAT_FLAG_ONAIR;
+        v->active = 1;
+    } else {
+        v->master_state ^=  CDJ_STAT_FLAG_PLAY;
+        v->master_state ^=  CDJ_STAT_FLAG_ONAIR;
+        v->active = 0;
+    }
+}
 // networks methods
 
 void
@@ -872,6 +900,14 @@ vdj_handle_managed_beat_unicast_datagram(vdj_t* v, vdj_beat_unicast_ph beat_unic
             if ( (b_pkt = cdj_new_beat_packet(packet, len)) ) {
                 // seems this may be ignored and following status packets are used instead
                 // optionally chain the handler
+                if (cdj_beat_master_ok(b_pkt)) {
+                    fprintf(stderr, "master handoff OK\n");
+                    cdj_fprint_packet(stderr, packet, length, CDJ_BEAT_PORT);
+                } else {
+                    fprintf(stderr, "error: master handoff failed\n");
+                    cdj_fprint_packet(stderr, packet, length, CDJ_BEAT_PORT);
+                }
+
                 if (beat_unicast_ph) beat_unicast_ph(v, b_pkt);
                 free(b_pkt);
             }
@@ -998,10 +1034,13 @@ vdj_handle_managed_update_datagram(vdj_t* v, vdj_update_ph update_ph, unsigned c
                     if (m->master_state == CDJ_MASTER_STATE_ON) {
                         v->backline->master_id = cs_pkt->player_id;
                     }
-                    // if i was master, and now someone else it
-                    if (v->master && m->master_state) {
-                        v->master = 0;
-                        v->master_req = -1;
+                    // if I am master, and now v->master_req matches his status
+                    // we let him take over
+                    if (v->master) {
+                        if (v->master_req != -1 && m->player_id == v->master_req) {
+                            v->master = 0;
+                            v->master_req = -1;
+                        }
                     }
                 }
 
@@ -1024,7 +1063,7 @@ vdj_stop_managed_update_thread(vdj_t* v)
 
 // backline management TODO new file + snip test
 
-static struct sockaddr_in*
+struct sockaddr_in*
 vdj_alloc_dest_addr(vdj_link_member_t* m, uint16_t port)
 {
     struct sockaddr_in* dest = calloc(1, sizeof(struct sockaddr_in));

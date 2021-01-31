@@ -823,7 +823,13 @@ cdj_beat_master(cdj_beat_packet_t* b_pkt)
     if (b_pkt->len < 0x26) return 0;
     return b_pkt->data[0x27];
 }
-
+// usef for beat maser resopnse
+uint32_t
+cdj_beat_master_ok(cdj_beat_packet_t* b_pkt)
+{
+    if (b_pkt->len < 0x2a) return 0;
+    return cdj_read_uint32(b_pkt->data, 0x28);
+}
 // Message creation functions, based on CDJ_Protocol_Analysis.pdf
 // hence magic numbers we dont know what mean.
 
@@ -1137,7 +1143,7 @@ cdj_create_status_packet(uint16_t* length, unsigned char model, uint8_t player_i
         cdj_set_uint16(packet + 0x90, 0x8000); // 8000 is track loaded, you can sync from me, Mv for master handoffs  backline->master_new
         // bpm x 100  as an int
         cdj_set_uint16(packet + 0x92, (int) (bpm * 100.0));
-
+        packet[0x9d] = active ? 0x09 : 0x01;  // playing or paused, XDJ will not sync without this flag being correct
         packet[0x9e] = master ? 0x01 : 0x00;  // Mm Now I am the master
         packet[0x9f] = new_master;  // Mh master handoff, new_master goes here if we get sent a master_req
 
@@ -1162,7 +1168,7 @@ cdj_create_master_request_packet(uint16_t* length, unsigned char model, uint8_t 
     uint8_t* packet = (uint8_t*) calloc(1, *length);
     if (packet) {
         cdj_set_header(packet, CDJ_MASTER_REQ);
-        cdj_set_model_name(packet + cdj_header_len(50001, 0), model);
+        cdj_set_model_name(packet + cdj_header_len(CDJ_BEAT_PORT, 0), model);
         packet[0x1f] = 0x01;
         packet[0x21] = player_id;
         packet[0x23] = 0x04;
@@ -1213,6 +1219,12 @@ cdj_create_sync_control_packet(uint16_t* length, unsigned char model, uint8_t pl
 void
 cdj_print_packet(uint8_t* packet, uint16_t length, uint16_t port)
 {
+    cdj_fprint_packet(stdout, packet, length, port);
+}
+
+void
+cdj_fprint_packet(FILE* f, uint8_t* packet, uint16_t length, uint16_t port)
+{
     int i;
     char* str = (char*) calloc(1, (length * 4) + 5 + length / 32);
     if (str == NULL) return;
@@ -1230,7 +1242,6 @@ cdj_print_packet(uint8_t* packet, uint16_t length, uint16_t port)
         else s += snprintf(s, 4, "%02x ", packet[i]);
     }
 
-    printf("packet::%03x %i\n'%s' type=%02x:%s\n%s\n", length, length, packet + hdr_len, packet[10], cdj_type_to_string(port, packet[10], packet[11]), str);
+    fprintf(f, "packet::%03x %i\n'%s' type=%02x:%s\n%s\n", length, length, packet + hdr_len, packet[10], cdj_type_to_string(port, packet[10], packet[11]), str);
     free(str);
 }
-

@@ -35,8 +35,10 @@ vdj_request_master(vdj_t* v)
     uint16_t length;
     vdj_link_member_t* m;
     uint8_t* pkt;
+    struct sockaddr_in* dest;
 
     uint8_t master_id = v->backline->master_id;
+
 
     // no existing master, only happens on reboot of _all_ players
     // TODO race should verify we have received at least one status packet once
@@ -49,42 +51,43 @@ vdj_request_master(vdj_t* v)
         return;
     }
 
-    if (master_id) {
+    if (master_id != v->player_id) {
         if ( (pkt = cdj_create_master_request_packet(&length, v->model, v->player_id)) ) {
             if ( (m = vdj_get_link_member(v, master_id)) ) {
-               vdj_sendto_update(v, m->update_addr, pkt, length);
+                if ( (dest = vdj_alloc_dest_addr(m, CDJ_BEAT_PORT)) ) {
+                    vdj_sendto_update(v, dest, pkt, length);
+                    free(dest);
+                    fprintf(stderr, "\nsent update to %i \n\n", master_id);
+                    cdj_fprint_packet(stderr, pkt, length, 50001);
+                }
             }
             free(pkt);
         } 
-
     }
-
-    // lets see if we can ignore the response on 50001
-    // if other players tell us we are the master managed_update can handle it.
-
 }
 
 
 void
 vdj_update_new_master(vdj_t* v, int8_t new_master_id)
 {
+    vdj_link_member_t* m;
+    int i;
     
     if (new_master_id > 0) {
         if (v->player_id == new_master_id) { // thats me!
+            //fprintf(stderr, "master handoff confirmed\n");
             v->master = 1;
             v->master_req = -1;
             v->backline->sync_counter++;
         }
-        // this is jumping the gun a bit, its not confirmed
-        // vdj_handle_managed_update_datagram() reads the correct bit
-        /*
-        vdj_link_member_t* m;
-        int i;
+        else {
+            //fprintf(stderr, "i'm not master\n");
+            v->master = 0;
+        }
         for (i = 0; i < VDJ_MAX_BACKLINE; i++) {
             if ( (m = v->backline->link_members[i]) ) {
-                m->master_state = m->player_id = new_master_id;
+                m->master_state = m->player_id == new_master_id ? CDJ_MASTER_STATE_ON : CDJ_MASTER_STATE_OFF;
             }
         }
-        */
     }
 }

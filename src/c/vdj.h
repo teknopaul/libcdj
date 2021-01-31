@@ -35,9 +35,9 @@ typedef struct {
     int32_t             pitch;         // slider amount (tempo not necessarily pitch)
     time_t              last_keepalive;// last time we heard from this player, rekordbox disconnects after 7 seconds
     struct timespec     last_beat;     // nanosecond time of last beat
-    uint8_t             bar_pos;
+    uint8_t             bar_pos;       // 
     uint8_t             active;        // device thinks its active
-    uint8_t             master_state;  // sync mater state
+    uint8_t             master_state;  // sync master state
     uint8_t             play_state;    // all the flags sent on a status packet
     unsigned int        known:1;       // this device knows us, we are getting stuff on 50002
     unsigned int        onair:1;       // DJMs can send out this info
@@ -84,15 +84,15 @@ typedef struct {
     int32_t             pitch;          // (tempo not necessarily pitch)
     uint8_t             master_state;   // my own state flags
     uint32_t            status_counter; // how many status packets have been sent
-    uint8_t             master;         // I think i am master
+    uint8_t             master;         // 0x01 I think i am master
     int8_t              master_req;     // some other player wants to be master or -1
     float               bpm;            // my virtual device's bpm
-    struct timespec     last_beat;      // nanosecond time of my last beat
-    uint8_t             active;         // device thinks its active, we chose this to also mean playing but there are other states
-    uint8_t             bar_pos;        // 0 index position in the bar
+    struct timespec     last_beat;      // nanosecond time of my last beat (MONOTONIC not epoc)
+    uint8_t             active;         // we chose this to mean playing, but there are other states for CDJs
+    uint8_t             bar_index;      // 0 - 3 index position in the bar
     unsigned int        auto_id:1;      // automatically assign id
-    unsigned int        have_id:1;      // automatically assign id
-    unsigned int        follow_master:1; // vdc should track master (in adj)
+    unsigned int        have_id:1;      // got an id assigned
+    unsigned int        follow_master:1; // vdj should track master (in adj)
 } vdj_t;
 
 typedef struct  {
@@ -138,8 +138,13 @@ void vdj_print_sockaddr(char* context, struct sockaddr_in* ip);
 void vdj_send_keepalive(vdj_t* v);
 // unicast our status to all members
 int vdj_send_status(vdj_t* v);
-// broadcast a beat
-void vdj_broadcast_beat(vdj_t* v, uint8_t bar_pos);
+// broadcast a beat, 
+// bpm does not have to be correct but its rendered on the CDJ so if bpm is not what is reported
+// the DJ will not know
+void vdj_broadcast_beat(vdj_t* v, float bpm, uint8_t bar_pos);
+// set not active if last beat was more than a second ago
+void vdj_expire_play_state(vdj_t* v);
+void vdj_set_playing(vdj_t* v, int playing);
 
 // sendto on different sockets and ports
 int vdj_sendto_discovery(vdj_t* v, uint8_t* packet, uint16_t packet_length);
@@ -185,5 +190,5 @@ vdj_link_member_t* vdj_new_link_member(vdj_t* v, cdj_discovery_packet_t* d_pkt);
 void vdj_update_link_member(vdj_link_member_t* m, uint32_t ip);
 uint8_t vdj_link_member_count(vdj_t* v);
 int64_t vdj_time_diff(vdj_t* v, vdj_link_member_t* m);
-
+struct sockaddr_in* vdj_alloc_dest_addr(vdj_link_member_t* m, uint16_t port);
 #endif /* _VDJ_H_INCLUDED_ */

@@ -168,14 +168,16 @@ vdj_handle_managed_timeout(vdj_t* v, vdj_handlers* handlers, uint8_t sig)
             vdj_send_keepalive(v);
             vdj_expire_players(v);
         }
+        vdj_expire_play_state(v);
     }
-    if ( sig == SIGQUIT  ) {
+    if ( sig == SIGQUIT ) {
         vdj_pselect_running = 0;
     }
-    if ( sig == SIGUSR1  ) {
+    // TODO might be good to handle master in signals
+    if ( sig == SIGUSR1 ) {
         //noop
     }
-    if ( sig == SIGUSR2  ) {
+    if ( sig == SIGUSR2 ) {
         //noop
     }
 }
