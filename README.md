@@ -183,8 +183,9 @@ You can do the discovery yourself to fine tune it. Or you can do a combination o
 
 [vdj_mon.c](https://github.com/teknopaul/libcdj/blob/master/src/c/vdj_mon.c) provides a full example of acting as a virtual CDJ.
 
+# Status
 
-Be warned in 2021 this API is not stable since this is quite experimental.
+Be warned the API is not stable since this is quite experimental and our understanding of the Prolink protocol changes as we make new discoveries.  Its difficult to name a feature if you cannot see how the original software developers named it.  Its difficult to know if an int is signed or unsigned if you have never witnessed a negative number on the network.
 
 Patches welcome.
 

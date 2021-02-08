@@ -1,4 +1,6 @@
 #include <rpc/rpc.h>
+#include <string.h>
+#include <iconv.h>
 
 #include "nfs.h"
 #include "mount.h"
@@ -10,7 +12,35 @@
 
 void vdj_iterate_exports(char *server);
 
-int main (int argc, char* argv[])
+
+static char*
+fromutf16(size_t len, char* src)
+{
+    size_t dest_len = (len * 2) + 1;
+
+    char* dest = calloc(1, dest_len);
+    char* d = dest; // iconv messes with dest*
+    iconv_t conv = iconv_open("UTF-8", "UTF-16");
+    iconv(conv, &src, &len, &dest, &dest_len);
+    iconv_close(conv);
+    return d;
+}
+
+static char*
+toutf16(size_t len, char* src)
+{
+    size_t dest_len = (len * 2) + 1;
+
+    char* dest = calloc(1, dest_len);
+    char* d = dest; // iconv messes with dest*
+    iconv_t conv = iconv_open("UTF-16", "UTF-8");
+    iconv(conv, &src, &len, &dest, &dest_len);
+    iconv_close(conv);
+    return d;
+}
+
+
+int main(int argc, char* argv[])
 {
     if (argc > 1) {
         vdj_iterate_exports(argv[1]);
@@ -23,6 +53,7 @@ vdj_iterate_exports(char *server)
 {
     CLIENT* client;
     FHandle* root;
+    char* dir;
 
     client = clnt_create(server, MOUNTPROG, MOUNTVERS, "udp");
     if (client == NULL) {
@@ -31,42 +62,52 @@ vdj_iterate_exports(char *server)
     }
 
 
-    DirPath argp;
-    argp.DirPath_len = 0;
-    argp.DirPath_val = (char *)L"/C/PIONEER/rekordbox/";  // apparently CDJs use utf-16LE??  /B/ SD slot, or /C/ USB slot.
-printf("len '%ls' \n", L"/C/");
+    ExportListRes* exports = mountproc_export_1(NULL, client);
 
-    FHStatus* status = mountproc_mnt_1(&argp, client);
-    if (status->status == NFS_OK) {
-        root = &status->FHStatus_u.directory;
-    } else {
-        printf("BORK: %i\n", status->status);
-        return;
-    }
-    printf("Mounted\n");
+    if (exports) {
+        ExportList* export = exports->next;
+        while (export) {
 
+            dir = fromutf16(export->fileSystem.DirPath_len, export->fileSystem.DirPath_val);
+            printf("  %s\n", dir);
+            FHStatus* status = mountproc_mnt_1(&export->fileSystem, client);
+            if (status->status == NFS_OK) {
+                root = &status->FHStatus_u.directory;
+            } else {
+                printf("BORK: %i\n", status->status);
+                return;
+            }
+            printf("Mounted %s\n", dir);
 
-    ReadDirArgs args;
-    memset(&args, 0, sizeof(ReadDirArgs));
-    memcpy(&args.dir, root, FHSIZE);
-    args.count = 1;
+            free(dir);
 
-    ReadDirRes* dir_res = nfsproc_readdir_2(&args, client);
-    if (dir_res == (ReadDirRes *) NULL || dir_res->status != NFS_OK) {
-        fprintf(stderr, "nfsproc_readdir_2 error: %i\n", dir_res->status);
-        clnt_perror (client, "call failed");
-    }
-    else {
-        Entry *entry = dir_res->ReadDirRes_u.readdirok.entries;
-        printf("%s dirs:\n", server);
-        while (entry) {
+            ReadDirArgs args;
+            memset(&args, 0, sizeof(ReadDirArgs));
+            memcpy(&args.dir, root, FHSIZE);
+            args.count = 1;
+            ReadDirRes* dir_res = nfsproc_readdir_2(&args, client);
+            if (dir_res == NULL) {
+                clnt_perror(client, "call failed"); // prints call failed: RPC: Procedure unavailable
+            }
+            else if (dir_res->status != NFS_OK) {
+                fprintf(stderr, "nfsproc_readdir_2 error: %i\n", dir_res->status);
+                clnt_perror(client, "call failed");
+            }
+            else {
+                Entry *entry = dir_res->ReadDirRes_u.readdirok.entries;
+                printf("%s dirs:\n", server);
+                while (entry) {
 
-            printf("  %s\n", entry->name.Filename_val);
+                    printf("  %s\n", fromutf16(entry->name.Filename_len, entry->name.Filename_val));
 
-            entry = entry->next;
+                    entry = entry->next;
+                }
+            }
+
+            export = export->next;
         }
     }
 
-    clnt_destroy (client);
+    clnt_destroy(client);
 
 }

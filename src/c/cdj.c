@@ -773,18 +773,7 @@ cdj_beat_calculated_bpm(cdj_beat_packet_t* b_pkt)
 {
     return cdj_calculated_bpm(cdj_beat_bpm(b_pkt), cdj_beat_pitch(b_pkt));
 }
-double
-cdj_beat_calculated_pitch(cdj_beat_packet_t* b_pkt)
-{
-    if (b_pkt->len < 0x56) return 0;
-    uint32_t pitch = cdj_beat_pitch(b_pkt);
-    int32_t decimal = 
-        (((uint8_t) pitch >> 16) * 10000) +  // I guess some bright spark at Pioneer
-        (((uint8_t) pitch >> 8) *  100) +    // figured you can only fit 1 to 100 in a byte, doh!
-        (((uint8_t) pitch >> 0) *  1);       // Id pay good money to see the comments in the code :)
-    return (double)(decimal - 100000) / 100000.0;
-}
-//
+
 uint32_t
 cdj_beat_next(cdj_beat_packet_t* b_pkt)
 {

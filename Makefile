@@ -2,6 +2,12 @@ name = libcdj
 tmp_dir := /tmp/$(name)_debbuild
 arch != uname -m
 
+ifeq ($(arch),x86_64)
+  LIBDIR=/usr/lib/x86_64-linux-gnu
+else ifeq ($(arch),armv6l)
+  LIBDIR=/usr/lib
+endif
+
 version != cat version | awk -F= '{print $$2}'
 
 CC = gcc
@@ -104,7 +110,7 @@ rpc:
 	cd src/x; $(CC) -fPIC -DPIC -Wall -c nfs_clnt.c
 
 	# hack 
-	# multiple definitions of `xdr_FHandle', so had to manually ahack the following
+	# multiple definitions of `xdr_FHandle', so had to manually hack the following
 	#cd src/x; $(CC) -fPIC -DPIC -Wall -c mount_xdr.c
 	#cd src/x; $(CC) -fPIC -DPIC -Wall -c nfs_xdr.c
 
@@ -113,12 +119,12 @@ rpc:
 rpc-list:
 	cd src/x; $(CC) -fPIC -DPIC -Wall -c vdj_list_exports.c
 	cd src/x; $(CC) -fPIC -DPIC -Wall -o list-exports xdr.o mount_clnt.o nfs_clnt.o vdj_list_exports.o
-	src/x/list-exports 192.168.1.59
+	src/x/list-exports 169.254.177.253
 
 rpc-readdir:
 	cd src/x; $(CC) -fPIC -DPIC -Wall -c vdj_nfs_explore.c
 	cd src/x; $(CC) -fPIC -DPIC -Wall -o read-dir xdr.o mount_clnt.o nfs_clnt.o vdj_nfs_explore.o
-	src/x/read-dir 192.168.1.59
+	src/x/read-dir 169.254.177.253
 
 test:
 	mkdir -p target/
@@ -134,27 +140,14 @@ clean:
 	rm -f src/test/*.o
 
 install:
-	cp target/libcdj.so target/libvdj.so /usr/lib/x86_64-linux-gnu/
+	cp target/libcdj.so target/libvdj.so $(LIBDIR)
 	mkdir -p /usr/include/cdj
 	cp src/c/*.h  /usr/include/cdj
 	cp target/vdj-mon /usr/bin
 	cp target/cdj-mon /usr/bin
 
 uninstall:
-	rm -f /usr/lib/x86_64-linux-gnu/libcdj.so /usr/lib/x86_64-linux-gnu/libvdj.so
-	rm -rf /usr/include/cdj
-	rm /usr/bin/vdj-mon
-	rm /usr/bin/cdj-mon
-
-install-rpi:
-	cp target/libcdj.so target/libvdj.so /usr/lib/
-	mkdir -p /usr/include/cdj
-	cp src/c/*.h  /usr/include/cdj
-	cp target/vdj-mon /usr/bin
-	cp target/cdj-mon /usr/bin
-
-uninstall-rpi:
-	rm -f /usr/lib/libcdj.so /usr/lib/libvdj.so
+	rm -f $(LIBDIR)/libcdj.so $(LIBDIR)/libvdj.so
 	rm -rf /usr/include/cdj
 	rm /usr/bin/vdj-mon
 	rm /usr/bin/cdj-mon
