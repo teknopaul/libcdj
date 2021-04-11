@@ -1,3 +1,5 @@
+#include <stdio.h>
+
 
 #include "vdj.h"
 #include "vdj_simple.h"

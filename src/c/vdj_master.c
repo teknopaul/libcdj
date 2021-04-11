@@ -1,5 +1,6 @@
 
-
+#include <stdlib.h>
+#include <stdio.h>
 
 #include "cdj.h"
 #include "vdj.h"

@@ -1,6 +1,7 @@
 #include <unistd.h>
 #include <pthread.h>
 #include <stdatomic.h>
+#include <stdio.h>
 
 #include "cdj.h"
 #include "vdj.h"
