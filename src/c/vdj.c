@@ -21,7 +21,6 @@
 #include <pthread.h>
 #include <stdatomic.h>
 #include <errno.h>
-#include <time.h>
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <sys/types.h>
@@ -262,7 +261,7 @@ vdj_send_status(vdj_t* v)
         for ( i = 0; i < VDJ_MAX_BACKLINE; i++) {
             if ( (m = v->backline->link_members[i]) && m->ip_addr) {
                 rv |= vdj_sendto_update(v, m->update_addr, pkt, length);
-                fprintf(stderr, "update sent to player_id=%02i err=%i len=%i bpm=%f\n", i, rv, length, v->bpm);
+                //fprintf(stderr, "update sent to player_id=%02i err=%i len=%i bpm=%f\n", i, rv, length, v->bpm);
                 //cdj_fprint_packet(stderr, pkt, length, CDJ_STATUS);
             }
         }
@@ -315,11 +314,16 @@ vdj_stop_threads(vdj_t* v)
     vdj_stop_keepalive_thread();
 }
 
+// Send out a beat from this VCD, this should run as close as possible in time to the beat
+// played by midi instruments.
 void
 vdj_broadcast_beat(vdj_t* v, float bpm, unsigned char bar_pos)
 {
     uint16_t length;
     unsigned char* pkt;
+    
+    clock_gettime(CDJ_CLOCK, &v->last_beat);
+    v->bpm = bpm;
 
     if (bar_pos) {
         v->bar_index = bar_pos - 1;
@@ -329,12 +333,9 @@ vdj_broadcast_beat(vdj_t* v, float bpm, unsigned char bar_pos)
         }
     }
 
-    v->bpm = bpm;
-
     if ( (pkt = cdj_create_beat_packet(&length, v->model, v->player_id, v->bpm, v->bar_index)) ) {
         vdj_sendto_beat(v, pkt, length);
         free(pkt);
-        clock_gettime(CLOCK_MONOTONIC, &v->last_beat);
         v->active = 1;
     }
 }
@@ -343,7 +344,7 @@ void
 vdj_expire_play_state(vdj_t* v)
 {
     struct timespec now;
-    clock_gettime(CLOCK_MONOTONIC, &now);
+    clock_gettime(CDJ_CLOCK, &now);
     if (v->active && (v->last_beat.tv_sec < now.tv_sec - 1)) {
         vdj_set_playing(v, 0);
     }
@@ -849,7 +850,7 @@ vdj_handle_managed_beat_datagram(vdj_t* v, vdj_beat_ph beat_ph, unsigned char* p
             if ( (b_pkt = cdj_new_beat_packet(packet, len)) ) {
                 if ( (m = vdj_get_link_member(v, b_pkt->player_id)) ) {
                     m->bpm = b_pkt->bpm;
-                    clock_gettime(CLOCK_MONOTONIC, &m->last_beat);
+                    m->last_beat = b_pkt->timestamp;
                 }
                 // optionally chain the handler so that client code can also react to client updates
                 if (beat_ph) beat_ph(v, b_pkt);
@@ -899,15 +900,15 @@ vdj_handle_managed_beat_unicast_datagram(vdj_t* v, vdj_beat_unicast_ph beat_unic
         case CDJ_MASTER_RESP : {
             if ( (b_pkt = cdj_new_beat_packet(packet, len)) ) {
                 // seems this may be ignored and following status packets are used instead
-                // optionally chain the handler
                 if (cdj_beat_master_ok(b_pkt)) {
-                    fprintf(stderr, "master handoff OK\n");
+                    //fprintf(stderr, "master handoff OK\n");
                     cdj_fprint_packet(stderr, packet, length, CDJ_BEAT_PORT);
                 } else {
                     fprintf(stderr, "error: master handoff failed\n");
                     cdj_fprint_packet(stderr, packet, length, CDJ_BEAT_PORT);
                 }
 
+                // optionally chain the handler
                 if (beat_unicast_ph) beat_unicast_ph(v, b_pkt);
                 free(b_pkt);
             }

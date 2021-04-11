@@ -10,6 +10,7 @@
 #include <stdint.h>
 #include <string.h>
 #include <inttypes.h>
+#include <time.h>
 
 // Constants //
 
@@ -115,6 +116,8 @@
 
 #define CDJ_MAX_DJM_CHANNELS           4      // max players supported by on air  packets
 
+#define CDJ_CLOCK CLOCK_REALTIME  // @see https://linux.die.net/man/2/clock_gettime
+
 // Data Structures
 
 typedef struct {
@@ -125,14 +128,14 @@ typedef struct {
 // Update (packets) types
 
 typedef struct {
-    uint16_t       len;
     uint8_t*       data;
+    uint16_t       len;
     uint8_t        type;
 } cdj_generic_packet_t;
 
 typedef struct {
-    uint16_t       len;
     uint8_t*       data;
+    uint16_t       len;
     uint8_t        type;
     uint8_t        sub_type;
     uint8_t        player_id;
@@ -141,25 +144,26 @@ typedef struct {
 } cdj_discovery_packet_t;
 
 typedef struct {
-    uint16_t       len;
-    uint8_t*       data;
-    uint8_t        type;
-    uint8_t        player_id;
-    uint8_t        bar_pos;
-    float          bpm;
+    uint8_t*        data;
+    uint16_t        len;
+    uint8_t         type;
+    uint8_t         player_id;
+    struct timespec timestamp;
+    uint8_t         bar_pos;
+    float           bpm;
 } cdj_beat_packet_t;
 
 typedef struct {
-    uint16_t       len;
     uint8_t*       data;
+    uint16_t       len;
     uint8_t        type;
     uint8_t        player_id;
     float          bpm;
 } cdj_mixer_status_packet_t;
 
 typedef struct {
-    uint16_t       len;
     uint8_t*       data;
+    uint16_t       len;
     uint8_t        type;
     uint8_t        player_id;
     float          bpm;
@@ -202,12 +206,13 @@ char* cdj_flags_to_chars(uint8_t flags);
 // returns malloced ANSI escape sequence representation of CDJ state
 char* cdj_flags_to_term(uint8_t flags);
 
-// pitch to percentabge adjustment e.g. +8.22% or -0.25%
+// pitch to percentage adjustment e.g. +8.22% or -0.25%
 double cdj_pitch_to_percentage(uint32_t pitch);
 // pitch to multiplier e.g. 1.0822 or 0.9775
 double cdj_pitch_to_multiplier(uint32_t pitch);
 float cdj_calculated_bpm(uint16_t track_bpm, uint32_t pitch);
 uint32_t cdj_beat_millis(float bpm);
+uint16_t cdj_bpm_to_int(float bpm);
 
 int cdj_ip_format(const char* ip_address, unsigned char* ip);
 struct sockaddr_in* cdj_ip_decode(uint32_t ip);
@@ -266,7 +271,7 @@ uint32_t cdj_status_counter(cdj_cdj_status_packet_t* cs_pkt);
 
 // read data from beat packets, N.B. the protocol support tracks that dont have constant BPM.
 /**
- * retuns a pointer to the model name in the packet, data is free() by managed trheads
+ * retuns a pointer to the model name in the packet, data is free() by managed threads
  */
 char* cdj_beat_model(cdj_beat_packet_t* cs_pkt);
 /**

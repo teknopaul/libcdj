@@ -2,9 +2,6 @@
 #ifndef _VDJ_H_INCLUDED_
 #define _VDJ_H_INCLUDED_
 
-#include <time.h>
-#include <inttypes.h>
-
 #include "cdj.h"
 
 #define VDJ_OK          0
@@ -28,17 +25,17 @@
 
 // Remote (real) CDJ
 typedef struct {
-    uint8_t             player_id;     // id of the device
-    struct sockaddr_in* ip_addr;       // ip address of the device
-    struct sockaddr_in* update_addr;   // ip address and port of the device for dm on CDJ_UPDATE_PORT
+    struct timespec     last_beat;     // nanosecond time of last beat
+    time_t              last_keepalive;// last time we heard from this player, (resolution in secs) rekordbox disconnects after 7 seconds
     float               bpm;           // calculated bpm, based on bpm reported in a beat message (2 decimal places)
     int32_t             pitch;         // slider amount (tempo not necessarily pitch)
-    time_t              last_keepalive;// last time we heard from this player, rekordbox disconnects after 7 seconds
-    struct timespec     last_beat;     // nanosecond time of last beat
+    struct sockaddr_in* ip_addr;       // ip address of the device
+    struct sockaddr_in* update_addr;   // ip address and port of the device for dm on CDJ_UPDATE_PORT
     uint8_t             bar_pos;       // 
     uint8_t             active;        // device thinks its active
     uint8_t             master_state;  // sync master state
     uint8_t             play_state;    // all the flags sent on a status packet
+    uint8_t             player_id;     // id of the device
     unsigned int        known:1;       // this device knows us, we are getting stuff on 50002
     unsigned int        onair:1;       // DJMs can send out this info
     unsigned int        gone:1;        // CDJ has gone from the network, no keep alive in 7 seconds
@@ -47,12 +44,12 @@ typedef struct {
 // State of the whole Network, as far as we know
 // N.B. requires managed threads to maintain this data based on status unicast message
 typedef struct {
-    uint8_t             player_count;
     vdj_link_member_t*  link_members[VDJ_MAX_BACKLINE + 1];  // link member in the slot for its player_id, in theory there are 255 slots in the protocol, 32 decks should be enough for Jeff Mills
-    uint8_t             master_id;         // this VDJ's opinion as to who is the master (there is negotiation across all the connected players) 0 = no master
+                                                             // this array always excludes self
     uint32_t            sync_counter;      // used for becoming master its a counter/sequence of all the ever handoffs
-    uint8_t             master_new;        // new master being negotiated
     float               master_bpm;        // bpm of the player thas claims to be beat sync master
+    uint8_t             master_id;         // this VDJ's opinion as to who is the master (there is negotiation across all the connected players) 0 = no master
+    uint8_t             master_new;        // new master being negotiated
 } vdj_backline_t;
 
 // Local VCDJ
@@ -75,21 +72,21 @@ typedef struct {
     uint8_t             model;          // CDJ_VDJ CDJ_XDJ or CDJ_CDJ
     uint8_t             player_id;      // player id 1 to 4 for CDJs rekordbox is 17, we use 5 by default
     uint8_t             device_type;    // device type
-    int                 refs;           // todo referrence counting
     uint8_t             reqid;          // last sent request id, aka n, used to identify individual discovery responses
+    int                 refs;           // todo referrence counting
 
     // state
     vdj_backline_t*     backline;       // info we have about other CDJs on the DJ Pro Link
-    void*               client;         // in anyone want to hook to our callbacks
     int32_t             pitch;          // (tempo not necessarily pitch)
     uint8_t             master_state;   // my own state flags
     uint32_t            status_counter; // how many status packets have been sent
     uint8_t             master;         // 0x01 I think i am master
     int8_t              master_req;     // some other player wants to be master or -1
     float               bpm;            // my virtual device's bpm
-    struct timespec     last_beat;      // nanosecond time of my last beat (MONOTONIC not epoc)
+    struct timespec     last_beat;      // nanosecond time of my last beat (may use MONOTONIC clock)
     uint8_t             active;         // we chose this to mean playing, but there are other states for CDJs
     uint8_t             bar_index;      // 0 - 3 index position in the bar
+    void*               client;         // if anyone wants to hook to our callbacks (e.g. adj_seq_info_t* adj)
     unsigned int        auto_id:1;      // automatically assign id
     unsigned int        have_id:1;      // got an id assigned
     unsigned int        follow_master:1; // vdj should track master (in adj)
@@ -184,11 +181,14 @@ void vdj_set_bpm(vdj_t* v, float bpm);
 
 // backline management
 
-// get link memeber or NULL
+// get link member or NULL, does not return self
 vdj_link_member_t* vdj_get_link_member(vdj_t* v, uint8_t player_id);
+// add a new member, checks not self
 vdj_link_member_t* vdj_new_link_member(vdj_t* v, cdj_discovery_packet_t* d_pkt);
+
 void vdj_update_link_member(vdj_link_member_t* m, uint32_t ip);
 uint8_t vdj_link_member_count(vdj_t* v);
 int64_t vdj_time_diff(vdj_t* v, vdj_link_member_t* m);
 struct sockaddr_in* vdj_alloc_dest_addr(vdj_link_member_t* m, uint16_t port);
+
 #endif /* _VDJ_H_INCLUDED_ */

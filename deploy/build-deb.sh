@@ -14,7 +14,9 @@ name=libcdj
 arch=$(uname -m)
 
 if [ $arch == armv6l ] ; then
-  lib_dir=/usr/lib/x86_64-linux-gnu
+  lib_dir=/usr/lib
+elif [ $arch == armv7l ] ; then
+  lib_dir=/usr/lib
 elif [ $arch == x86_64 ] ; then
   lib_dir=/usr/lib
 fi
@@ -49,6 +51,11 @@ cp --archive \
 cp --archive target/*.so \
     $tmp_dir/$lib_dir
 
+# ref https://tldp.org/HOWTO/Program-Library-HOWTO/shared-libraries.html
+mv $tmp_dir/$lib_dir/libcdj.so $tmp_dir/$lib_dir/libcdj.so.1.0
+mv $tmp_dir/$lib_dir/libvdj.so $tmp_dir/$lib_dir/libvdj.so.1.0
+(cd $tmp_dir/$lib_dir; ln -s libcdj.so.1.0 libcdj.so; ln -s libvdj.so.1.0 libvdj.so)
+
 # hdrs
 cp --archive src/c/*.h \
     $tmp_dir/usr/include/cdj
@@ -73,8 +80,8 @@ cp --archive -R $project_root/deploy/DEBIAN/p* $tmp_dir/DEBIAN
 # perms
 #
 chown root.root $tmp_dir/usr/bin/* $tmp_dir/$lib_dir/*
-chmod 755 $tmp_dir/usr/bin/* $tmp_dir/$lib_dir
-chmod 644 $tmp_dir/$lib_dir/*
+find $tmp_dir/ -type d | xargs chmod 755
+find $tmp_dir/ -type f | xargs chmod go-w
 
 #
 # Build the .deb

@@ -8,6 +8,7 @@ make clean
 make
 make test
 make deb
+sudo make uninstall ||:
 sudo make install
 sudo make uninstall
 sudo dpkg -i target/*.deb

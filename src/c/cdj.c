@@ -11,14 +11,15 @@
  * @author teknopaul
  */
 
+#include <stdlib.h>
 #include <stdio.h>
+#include <string.h>
 #include <unistd.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 
 #include "cdj.h"
-
 
 uint8_t CDJ_MAGIC_HEADER[10] = {0x51, 0x73, 0x70, 0x74, 0x31, 0x57, 0x6d, 0x4a, 0x4f, 0x4c}; // reads Qspt1WmJOL
 
@@ -274,6 +275,8 @@ cdj_new_discovery_packet(uint8_t* packet, uint16_t len)
 cdj_beat_packet_t*
 cdj_new_beat_packet(uint8_t* packet, uint16_t len)
 {
+    struct timespec timestamp;
+    clock_gettime(CDJ_CLOCK, &timestamp);
     if (cdj_validate_header(packet, len) != CDJ_OK) {
         return NULL;
     }
@@ -282,6 +285,7 @@ cdj_new_beat_packet(uint8_t* packet, uint16_t len)
     if (b_pkt != NULL) {
         if (b_pkt->type == CDJ_BEAT) {
             b_pkt->player_id = cdj_beat_player_id(b_pkt);
+            b_pkt->timestamp = timestamp;
             b_pkt->bpm = cdj_beat_calculated_bpm(b_pkt);
             b_pkt->bar_pos = cdj_beat_bar_pos(b_pkt);
         }
@@ -353,6 +357,18 @@ cdj_beat_millis(float bpm)
     return (uint32_t) (60000.0 / bpm);
 }
 
+float
+cdj_bpm_from_millis(uint32_t millis_per_beat)
+{
+    return 60 / (millis_per_beat / 1000.0);
+}
+
+// return bpm as it is sent in packets
+uint16_t
+cdj_bpm_to_int(float bpm)
+{
+    return (uint16_t) (bpm * 100);
+}
 
 //pitch to multiplier
 double
@@ -748,12 +764,13 @@ cdj_status_counter(cdj_cdj_status_packet_t* cs_pkt)
 
 
 // beat
-// this returns the BPM x 100
+// returns a pointer to the model name
 char*
 cdj_beat_model(cdj_beat_packet_t* b_pkt)
 {
     return (char *) b_pkt->data + CDJ_PACKET_TYPE_OFFSET + 1;
 }
+// this returns the BPM x 100
 uint16_t
 cdj_beat_bpm(cdj_beat_packet_t* b_pkt)
 {
@@ -1050,9 +1067,8 @@ cdj_create_beat_packet(uint16_t* length, unsigned char model, uint8_t player_id,
         // TODO pitch, midi does not pitch adjust
         cdj_set_uint32(packet + 0x54, 0x00100000);
 
-        // bpm (protocol hardcodes to 2 decimal places, but seems to reserve space)
-        uint16_t bpm_i = (uint16_t) (bpm * 100);
-        cdj_set_uint32(packet + 0x58, bpm_i);
+        // bpm
+        cdj_set_uint32(packet + 0x58, cdj_bpm_to_int(bpm));
 
         // b, bar index
         packet[0x5c] = bar_index + 1;
@@ -1158,10 +1174,10 @@ cdj_create_master_request_packet(uint16_t* length, unsigned char model, uint8_t 
     if (packet) {
         cdj_set_header(packet, CDJ_MASTER_REQ);
         cdj_set_model_name(packet + cdj_header_len(CDJ_BEAT_PORT, 0), model);
-        packet[0x1f] = 0x01;
+        cdj_set_uint16(packet + 0x1f, CDJ_BEAT_VERSION);
         packet[0x21] = player_id;
-        packet[0x23] = 0x04;
-        packet[0x27] = player_id;
+        cdj_set_uint16(packet + 0x22, *length);
+        cdj_set_uint32(packet + 0x24, player_id);
     }
     return packet;
 }
@@ -1176,12 +1192,12 @@ cdj_create_master_response_packet(uint16_t* length, unsigned char model, uint8_t
     uint8_t* packet = (uint8_t*) calloc(1, *length);
     if (packet) {
         cdj_set_header(packet, CDJ_MASTER_RESP);
-        cdj_set_model_name(packet + cdj_header_len(50001, 0), model);
-        packet[0x1f] = 0x01;
+        cdj_set_model_name(packet + cdj_header_len(CDJ_BEAT_PORT, 0), model);
+        cdj_set_uint16(packet + 0x1f, CDJ_BEAT_VERSION);
         packet[0x21] = player_id;
-        packet[0x23] = 0x08;
-        packet[0x27] = player_id;
-        packet[0x2b] = 0x01;
+        cdj_set_uint16(packet + 0x22, *length);
+        cdj_set_uint32(packet + 0x24, player_id);
+        cdj_set_uint32(packet + 0x28, 1);
     }
     return packet;
 }
@@ -1193,11 +1209,11 @@ cdj_create_sync_control_packet(uint16_t* length, unsigned char model, uint8_t pl
     uint8_t* packet = (uint8_t*) calloc(1, *length);
     if (packet) {
         cdj_set_header(packet, CDJ_SYNC_CONTROL);
-        cdj_set_model_name(packet + cdj_header_len(50001, 0), model);
-        packet[0x1f] = 0x01;
+        cdj_set_model_name(packet + cdj_header_len(CDJ_BEAT_PORT, 0), model);
+        cdj_set_uint16(packet + 0x1f, CDJ_BEAT_VERSION);
         packet[0x21] = player_id;
-        packet[0x23] = 0x08;
-        packet[0x27] = player_id;
+        cdj_set_uint16(packet + 0x22, *length);
+        cdj_set_uint32(packet + 0x24, player_id);
         packet[0x2b] = on_off ? 0x10 : 0x20;
     }
     return packet;

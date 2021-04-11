@@ -19,15 +19,15 @@ int main(int argc , char* argv[])
     vdj_t* v = (vdj_t*) calloc(1, sizeof(vdj_t));
     vdj_link_member_t* m = (vdj_link_member_t*) calloc(1, sizeof(vdj_link_member_t));
 
-    clock_gettime(CLOCK_MONOTONIC, &m->last_beat);
+    clock_gettime(CDJ_CLOCK, &m->last_beat);
     usleep(20000);
-    clock_gettime(CLOCK_MONOTONIC, &v->last_beat);
+    clock_gettime(CDJ_CLOCK, &v->last_beat);
 
     snip_assert("time_diff", vdj_time_diff(v, m) < 0);
     //printf("tdiff=%+06li\n", vdj_time_diff(v, m));
 
     usleep(20000);
-    clock_gettime(CLOCK_MONOTONIC, &m->last_beat);
+    clock_gettime(CDJ_CLOCK, &m->last_beat);
 
     snip_assert("time_diff", vdj_time_diff(v, m) > 0);
     //printf("tdiff=%+06li\n", vdj_time_diff(v, m));

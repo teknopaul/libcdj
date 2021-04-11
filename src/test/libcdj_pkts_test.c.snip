@@ -20,6 +20,7 @@ int main(int argc, const char* argv[])
     char master = 0;
     int8_t new_master = -1;
     unsigned char model = 'X';
+    float bpm = 120.00;
     uint8_t bar_pos = 3;
     uint8_t active = 1;
     uint32_t sync_counter = 99;
@@ -57,19 +58,22 @@ int main(int argc, const char* argv[])
         cdj_print_packet(packet, len, 50001);
     }
 
-
-    packet = cdj_create_beat_packet(&len, model, player_id, 120.00, 3);
+    packet = cdj_create_beat_packet(&len, model, player_id, bpm, bar_pos);
     if ( ! dump_cmp("cdj-beat.dump", packet, len) ) {
         cdj_print_packet(packet, len, 50001);
     }
 
-
-    packet = cdj_create_status_packet(&len, model, player_id,
-        120.00, bar_pos, active, master, new_master, sync_counter, 
-        n);
+    packet = cdj_create_status_packet(&len, model, player_id, bpm, bar_pos, 
+        active, master, new_master, sync_counter, n);
     if ( ! dump_cmp("cdj-status.dump", packet, len) ) {
         cdj_print_packet(packet, len, 50001);
     }
+
+    packet = cdj_create_id_collision_packet(&len, model, player_id, ip);
+    if ( ! dump_cmp("cdj-collision.dump", packet, len) ) {
+        cdj_print_packet(packet, len, 50001);
+    }
+
 
     exit(0);
 }

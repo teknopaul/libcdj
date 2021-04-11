@@ -48,6 +48,7 @@ vdj_check_for_id_reuse(vdj_t* v)
     ssize_t len;
 
     if (v->auto_id) {
+        // socket timeout set to CDJ_REPLY_WAIT
         len = recv(v->discovery_unicast_socket_fd, packet, 1500, 0);
         if (len > 0) {
             vdj_handle_managed_discovery_unicast_datagram(v, NULL, packet, len);
@@ -59,7 +60,7 @@ vdj_check_for_id_reuse(vdj_t* v)
 }
 
 static int
-vdj_set_discovery_socket_timouts(vdj_t* v)
+vdj_set_discovery_socket_timeouts(vdj_t* v)
 {
     struct timeval sleep_time;
     sleep_time.tv_sec = 0;
@@ -105,7 +106,7 @@ vdj_exec_discovery(vdj_t* v)
     uint16_t length;
     int rv;
 
-    if ( vdj_set_discovery_socket_timouts(v) ) {
+    if ( vdj_set_discovery_socket_timeouts(v) ) {
         return CDJ_ERROR;
     }
 
@@ -419,7 +420,7 @@ vdj_handle_managed_discovery_datagram(vdj_t* v, vdj_discovery_ph discovery_ph, u
 
 /**
  * check to see if a player sends us a CDJ_ID_USE_RESP message, indicating the player_no we tried is already in use.
- * waits 300ms on the unicast 50000 socket fd
+ * if number is in use, increment player_id for the next try.
  */
 void
 vdj_handle_managed_discovery_unicast_datagram(vdj_t* v, vdj_discovery_unicast_ph discovery_unicast_ph, uint8_t* packet, ssize_t len)

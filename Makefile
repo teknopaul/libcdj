@@ -3,7 +3,7 @@ tmp_dir := /tmp/$(name)_debbuild
 arch != uname -m
 
 ifeq ($(arch),x86_64)
-  LIBDIR=/usr/lib/x86_64-linux-gnu
+  LIBDIR=/usr/lib
 else ifeq ($(arch),armv6l)
   LIBDIR=/usr/lib
 endif
@@ -140,14 +140,17 @@ clean:
 	rm -f src/test/*.o
 
 install:
-	cp target/libcdj.so target/libvdj.so $(LIBDIR)
+	cp target/libcdj.so $(LIBDIR)/libcdj.so.1.0
+	cp target/libvdj.so $(LIBDIR)/libvdj.so.1.0
+	cd $(LIBDIR); ln -s libcdj.so.1.0 libcdj.so
+	cd $(LIBDIR); ln -s libvdj.so.1.0 libvdj.so
 	mkdir -p /usr/include/cdj
 	cp src/c/*.h  /usr/include/cdj
 	cp target/vdj-mon /usr/bin
 	cp target/cdj-mon /usr/bin
 
 uninstall:
-	rm -f $(LIBDIR)/libcdj.so $(LIBDIR)/libvdj.so
+	rm -f $(LIBDIR)/libcdj.so.1.0 $(LIBDIR)/libvdj.so.1.0 $(LIBDIR)/libcdj.so $(LIBDIR)/libvdj.so
 	rm -rf /usr/include/cdj
 	rm /usr/bin/vdj-mon
 	rm /usr/bin/cdj-mon

@@ -193,6 +193,18 @@ vdj_pselect_handler_socket(vdj_t* v, vdj_handlers* handlers, fd_set *readfds)
     ssize_t len;
     uint8_t packet[1500];
 
+    // beats
+    if ( FD_ISSET(v->beat_socket_fd, readfds) ) {
+        len = recv(v->beat_socket_fd, packet, 1500, 0);
+        if (len == -1) {
+            fprintf(stderr, "error: beat_socket_fd read '%s'\n", strerror(errno));
+        } else {
+            if ( ! cdj_validate_header(packet, len) ) {
+                vdj_handle_managed_beat_datagram(v, handlers->beat_ph, packet, len);
+            }
+        }
+    }
+
     if ( FD_ISSET(v->discovery_socket_fd, readfds) ) {
         len = recv(v->discovery_socket_fd, packet, 1500, 0);
         if (len == -1) {
@@ -214,18 +226,6 @@ vdj_pselect_handler_socket(vdj_t* v, vdj_handlers* handlers, fd_set *readfds)
             }
         }
 
-    }
-
-    // beats
-    if ( FD_ISSET(v->beat_socket_fd, readfds) ) {
-        len = recv(v->beat_socket_fd, packet, 1500, 0);
-        if (len == -1) {
-            fprintf(stderr, "error: beat_socket_fd read '%s'\n", strerror(errno));
-        } else {
-            if ( ! cdj_validate_header(packet, len) ) {
-                vdj_handle_managed_beat_datagram(v, handlers->beat_ph, packet, len);
-            }
-        }
     }
 
     // beat unicast (master handoff)

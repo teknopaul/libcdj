@@ -28,10 +28,6 @@ int main(int argc, char *argv[])
     char* iface = NULL;
     float bpm = 0.0;
 
-    // we need to know which interface to use
-    // likely to have wifi and LAN for CDJs at home
-    // TODO likely not to have DHCPd in a club
-
     // TODO -f force by sending a message to all CDJs to turn on sync !
 
     int c;
