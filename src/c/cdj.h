@@ -5,10 +5,6 @@
 #ifndef _LIBCDJ_H_INCLUDED_
 #define _LIBCDJ_H_INCLUDED_
 
-#include <stdlib.h>
-#include <stdio.h>
-#include <stdint.h>
-#include <string.h>
 #include <inttypes.h>
 #include <time.h>
 

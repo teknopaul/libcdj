@@ -8,6 +8,9 @@
 #include <pthread.h>
 #include <stdatomic.h>
 #include <errno.h>
+#include <stdlib.h>
+#include <stdio.h>
+#include <string.h>
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <sys/types.h>
@@ -85,7 +88,7 @@ vdj_expire_players(vdj_t* v)
         now = time(0);
         for (i = 0; i < VDJ_MAX_BACKLINE; i++) {
             if ( (m = v->backline->link_members[i]) ) {
-                if ( m->last_keepalive < now - 7 ) { // observer timeout from XDJs
+                if ( m->last_keepalive < now - 7 ) { // observed timeout from XDJs
                     // dont free() thread issues, just mark it as gone
                     m->gone = 1;
                     m->active = 0;
