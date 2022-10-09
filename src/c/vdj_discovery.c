@@ -77,7 +77,7 @@ vdj_set_discovery_socket_timeouts(vdj_t* v)
 }
 
 void
-vdj_expire_players(vdj_t* v)
+vdj_expire_players(vdj_t* v, vdj_expired_h expired_h)
 {
     time_t now;
     int i;
@@ -92,6 +92,7 @@ vdj_expire_players(vdj_t* v)
                     // dont free() thread issues, just mark it as gone
                     m->gone = 1;
                     m->active = 0;
+                    if (expired_h) expired_h(v, m);
                 }
             }
         }
@@ -219,7 +220,7 @@ vdj_managed_discovery_loop(void* arg)
             }
         } while (len > 0);
 
-        vdj_expire_players(v);
+        vdj_expire_players(v, NULL);
 
         vdj_send_keepalive(v);
 

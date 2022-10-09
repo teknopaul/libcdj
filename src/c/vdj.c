@@ -411,7 +411,7 @@ vdj_get_network_details(char* iface, unsigned char** out_mac, char** out_ip_addr
     }
 
     if (err) {
-        fprintf(stderr, "error: could not determine ip address (use -i)\n");
+        fprintf(stderr, "error: could not determine ip address (provide nic)\n");
         vdj_print_iface();
         free(mac);
         free(ip_addr);

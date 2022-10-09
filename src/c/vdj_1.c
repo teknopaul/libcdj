@@ -101,7 +101,7 @@ int main(int argc, char *argv[])
 
     printf("became link member as player %02i\n", v->player_id);
 
-    if ( vdj_pselect_init(v, NULL, NULL, NULL, NULL, NULL) != CDJ_OK) {
+    if ( vdj_pselect_init(v, NULL, NULL, NULL, NULL, NULL, NULL) != CDJ_OK) {
         fprintf(stderr, "error: pselect initialization\n");
         vdj_destroy(v);
         return 1;

@@ -36,7 +36,8 @@ typedef struct {
     vdj_discovery_unicast_ph    discovery_unicast_ph;
     vdj_update_ph               update_ph;
     vdj_beat_ph                 beat_ph;
-    vdj_beat_unicast_ph                 beat_unicast_ph;
+    vdj_beat_unicast_ph         beat_unicast_ph;
+    vdj_expired_h               expired_h;
 } vdj_handlers;
 
 /**
@@ -169,7 +170,7 @@ vdj_handle_managed_timeout(vdj_t* v, vdj_handlers* handlers, uint8_t sig)
         vdj_send_status(v);
         if (++keepalive_ticker % 8 == 0) {
             vdj_send_keepalive(v);
-            vdj_expire_players(v);
+            vdj_expire_players(v, handlers->expired_h);
         }
         vdj_expire_play_state(v);
     }

@@ -6,6 +6,8 @@ ifeq ($(arch),x86_64)
   LIBDIR=/usr/lib
 else ifeq ($(arch),armv6l)
   LIBDIR=/usr/lib
+else ifeq ($(arch),armv7l)
+  LIBDIR=/usr/lib
 endif
 
 version != cat version | awk -F= '{print $$2}'
@@ -27,7 +29,7 @@ OBJS = target/cdj.o target/vdj_store.o target/vdj_net.o target/vdj_beatout.o tar
        target/vdj.o
 
 all: target target/libcdj.so target/libvdj.so \
-     target/cdj-mon target/vdj-mon target/vdj-debug target/vdj target/vdj-1
+     target/cdj-mon target/cdj-scan target/vdj-mon target/vdj-debug target/vdj target/vdj-1
 
 target:
 	mkdir -p target
@@ -42,6 +44,9 @@ target/vdj: $(OBJS) target/vdj_main.o
 
 target/cdj-mon: $(OBJS) target/cdj_mon.o
 	$(CC) $(CFLAGS) -o $@ $(OBJS) target/cdj_mon.o -lpthread
+
+target/cdj-scan: $(OBJS) target/cdj_scan.o
+	$(CC) $(CFLAGS) -o $@ $(OBJS) target/cdj_scan.o -lpthread
 
 target/vdj-mon: $(OBJS) target/vdj_mon.o
 	$(CC) $(CFLAGS) -o $@ $(OBJS) target/vdj_mon.o -lpthread
@@ -58,6 +63,9 @@ target/vdj_debug.o: src/c/vdj_debug.c
 
 target/vdj_mon.o: src/c/vdj_mon.c
 	$(CC) $(CFLAGS) src/c/vdj_mon.c -c -o $@
+
+target/cdj_scan.o: src/c/cdj_scan.c
+	$(CC) $(CFLAGS) src/c/cdj_scan.c -c -o $@
 
 target/vdj_main.o: src/c/vdj_main.c
 	$(CC) $(CFLAGS) src/c/vdj_main.c -c -o $@
@@ -140,20 +148,22 @@ clean:
 	rm -f src/test/*.o
 
 install:
-	cp target/libcdj.so $(LIBDIR)/libcdj.so.1.0
-	cp target/libvdj.so $(LIBDIR)/libvdj.so.1.0
-	cd $(LIBDIR); ln -s libcdj.so.1.0 libcdj.so
-	cd $(LIBDIR); ln -s libvdj.so.1.0 libvdj.so
+	cp -f target/libcdj.so $(LIBDIR)/libcdj.so.1.0
+	cp -f target/libvdj.so $(LIBDIR)/libvdj.so.1.0
+	cd $(LIBDIR); test -h libcdj.so || ln -s libcdj.so.1.0 libcdj.so
+	cd $(LIBDIR); test -h libvdj.so || ln -s libvdj.so.1.0 libvdj.so
 	mkdir -p /usr/include/cdj
-	cp src/c/*.h  /usr/include/cdj
-	cp target/vdj-mon /usr/bin
-	cp target/cdj-mon /usr/bin
+	cp -f src/c/*.h  /usr/include/cdj
+	cp -f target/vdj-mon /usr/bin
+	cp -f target/cdj-mon /usr/bin
+	cp -f target/cdj-scan /usr/bin
 
 uninstall:
 	rm -f $(LIBDIR)/libcdj.so.1.0 $(LIBDIR)/libvdj.so.1.0 $(LIBDIR)/libcdj.so $(LIBDIR)/libvdj.so
 	rm -rf /usr/include/cdj
 	rm /usr/bin/vdj-mon
 	rm /usr/bin/cdj-mon
+	rm /usr/bin/cdj-scan
 
 deb:
 	sudo deploy/build-deb.sh

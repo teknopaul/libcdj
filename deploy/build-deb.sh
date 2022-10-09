@@ -43,6 +43,7 @@ mkdir -p \
 # bins
 cp --archive \
   target/cdj-mon \
+  target/cdj-scan \
   target/vdj \
   target/vdj-debug \
     $tmp_dir/usr/bin

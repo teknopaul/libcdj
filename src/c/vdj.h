@@ -9,7 +9,7 @@
 
 #define VDJ_MAX_BACKLINE         32   // max devices on the link we can handle, also highest player_id
 #define VDJ_DEVICE_TYPE          CDJ_DEV_TYPE_CDJ  // 1
-#define VDJ_MAX_PLAYERS          4    // max players onthe backline, protocol seems to imply 4 is max
+#define VDJ_MAX_PLAYERS          4    // max players on the backline, protocol seems to imply 4 is max
 
 // Initialization flags
 // First 3 bits are player_id 0 - 15 is player ID  (when zero user player _id 5)
@@ -115,6 +115,9 @@ typedef void (*vdj_discovery_unicast_ph)(vdj_t* v, cdj_discovery_packet_t* d_pkt
 typedef void (*vdj_update_ph)(vdj_t* v, cdj_cdj_status_packet_t* cs_pkt);
 typedef void (*vdj_beat_ph)(vdj_t* v, cdj_beat_packet_t* b_pkt);
 typedef void (*vdj_beat_unicast_ph)(vdj_t* v, cdj_beat_packet_t* b_pkt);
+
+// handler for members leaving the prolink network
+typedef void (*vdj_expired_h)(vdj_t* v, vdj_link_member_t* m);
 
 // allocs
 vdj_t* vdj_init(uint32_t flags);
