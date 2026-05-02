@@ -56,6 +56,7 @@
 #define CDJ_KEEP_ALIVE           0x06 // sent to clarify that we are still here
 #define CDJ_COLLISION            0x08 // Player number clash
 #define CDJ_DISCOVERY            0x0a // also initial discovery (on 50000) (potentialy compatibiltiy request)
+#define CDJ_INIT_UNKNONW         0x28 // Beat
 
 // The status /control channel
 #define CDJ_FADER_START_COMMAND  0x02

@@ -1099,7 +1099,7 @@ cdj_create_status_packet(uint16_t* length, unsigned char model, uint8_t player_i
 
         packet[0x27] = active;     // A  active
         packet[0x28] = player_id;  // Dr trackloaded from myself
-        packet[0x29] = 0x03;       // Sr track loaded from USB
+        packet[0x29] = active ? 0x03 : 0x00; // Sr no track or track loaded from USB
         packet[0x2a] = 0x01;       // Tr track supports beat grid (we thus have to broadcast beat frames)
 
 
@@ -1170,7 +1170,7 @@ cdj_create_status_packet(uint16_t* length, unsigned char model, uint8_t player_i
         packet[0xa3] = active ? 1 + bar_index : 0;  // we loop on 4
         //0xa4 01ff  // Cue point comming (01ff means no point within 254 beats)
         packet[0xa4] = 0x01;
-        packet[0xa5] = 0xff; // no pending cue point counts down from 256 beats to the next CUE point in the track
+        packet[0xa5] = 0xff; // no pending cue point, counts down from 256 beats to the next CUE point in the track
         
         if (active) {
             packet[0xa6] = 1 + bar_index;
@@ -1179,7 +1179,7 @@ cdj_create_status_packet(uint16_t* length, unsigned char model, uint8_t player_i
         }
 
         cdj_set_uint32(packet + 0xc8, n);
-        packet[0xcc] = 0x0f;  // I am nexus
+        packet[0xcc] = 0x0f;  // 0x0f I am nexus, 0x05 I am older
 
     }
     return packet;
