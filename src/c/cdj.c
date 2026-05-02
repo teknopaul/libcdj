@@ -1136,8 +1136,13 @@ cdj_create_status_packet(uint16_t* length, unsigned char model, uint8_t player_i
         if (master) {
             packet[0x89] |= CDJ_STAT_FLAG_MASTER;
         }
-        packet[0x8a] = 0xff;
-
+        
+        packet[0x8a] = 0xff; // wft xjd-700 sends 0xff
+        if (active) {
+            packet[0x8b] = 0x7a; // sync state 0x7a(122) 0xfa(250) (bit mask last bit means something(ever played?)) bit 3 = playing bit 5 =0 =prenexus
+        } else {
+            packet[0x8b] = 0x7e; //            0x7e(126) 0xfe(254) are stopped
+        }
         // pitch
         cdj_set_uint32(packet + 0x8c, CDJ_PITCH_NORMAL);
         cdj_set_uint32(packet + 0x98, CDJ_PITCH_NORMAL);
@@ -1149,6 +1154,7 @@ cdj_create_status_packet(uint16_t* length, unsigned char model, uint8_t player_i
         cdj_set_uint16(packet + 0x90, 0x8000); // 8000 is track loaded, you can sync from me, Mv for master handoffs  backline->master_new
         // bpm x 100  as an int
         cdj_set_uint16(packet + 0x92, (int) (bpm * 100.0));
+        // packet[0x9c] = 0x00;
         packet[0x9d] = active ? 0x09 : 0x01;  // playing or paused, XDJ will not sync without this flag being correct
         packet[0x9e] = master ? 0x01 : 0x00;  // Mm Now I am the master
         packet[0x9f] = new_master;  // Mh master handoff, new_master goes here if we get sent a master_req
@@ -1157,14 +1163,20 @@ cdj_create_status_packet(uint16_t* length, unsigned char model, uint8_t player_i
         // magic / unknown
         cdj_set_uint32(packet + 0x94, 0x7fffffff);
 
-        //0xa3 09
-        //0xa4 01
-        //0xa5 ff
-        packet[0xa3] = 0x09;
+        //0xa0 // 4 digit beat counter from start of the track
+        //0xa1
+        //0xa2
+        //0xa3 
+        packet[0xa3] = active ? 1 + bar_index : 0;  // we loop on 4
+        //0xa4 01ff  // Cue point comming (01ff means no point within 254 beats)
         packet[0xa4] = 0x01;
-        packet[0xa5] = 0xff;
+        packet[0xa5] = 0xff; // no pending cue point counts down from 256 beats to the next CUE point in the track
         
-        packet[0xa6] = 1 + bar_index;
+        if (active) {
+            packet[0xa6] = 1 + bar_index;
+        } else {
+            packet[0xa6] = 0;
+        }
 
         cdj_set_uint32(packet + 0xc8, n);
         packet[0xcc] = 0x0f;  // I am nexus

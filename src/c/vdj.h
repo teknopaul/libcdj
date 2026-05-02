@@ -85,7 +85,7 @@ typedef struct {
     float               bpm;            // my virtual device's bpm
     struct timespec     last_beat;      // nanosecond time of my last beat (may use MONOTONIC clock)
     uint8_t             active;         // we chose this to mean playing, but there are other states for CDJs
-    uint8_t             bar_index;      // 0 - 3 index position in the bar
+    uint8_t             bar_index;      // 0 - 3 index position in the bar (players send 1,2,3,4 when playing and 0 when stoopped)
     void*               client;         // if anyone wants to hook to our callbacks (e.g. adj_seq_info_t* adj)
     unsigned int        auto_id:1;      // automatically assign id
     unsigned int        have_id:1;      // got an id assigned
