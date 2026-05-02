@@ -333,7 +333,7 @@ cdj_new_mixer_status_packet(uint8_t* packet, uint16_t len) {
 
 // these are deep symetries versions
 
-// 0x100000 = 1048567
+// 0x100000 = 1048567 BUG with negative numbers test int32_t
 double
 cdj_pitch_to_percentage_bpm(uint32_t pitch) {
     return (pitch - 1048567) / 10485.76;
@@ -1039,7 +1039,7 @@ cdj_create_beat_packet(uint16_t* length, unsigned char model, uint8_t player_id,
         cdj_set_uint16(packet + 0x1f, CDJ_BEAT_VERSION);
 
         packet[0x21] = player_id;  // device number or player number?
-        cdj_set_uint16(packet + 0x22, *length);
+        cdj_set_uint16(packet + 0x22, 0x60 - 36); // random length-36 but that is what the pioneers do
 
         beat_offset = 0x24;
         
@@ -1089,10 +1089,10 @@ cdj_create_status_packet(uint16_t* length, unsigned char model, uint8_t player_i
     if (packet) {
         cdj_set_header(packet, CDJ_STATUS);
         cdj_set_model_name(packet + cdj_header_len(CDJ_UPDATE_PORT, CDJ_STATUS), model);
-        packet[0x1f] = 0x01;
-        packet[0x20] = 0x03;
+        packet[0x1f] = 0x01;  // major
+        packet[0x20] = 0x03;  // minor (xdj700 sends 4)
         packet[0x21] = player_id;
-        cdj_set_uint16(packet + 0x22, *length);
+        cdj_set_uint16(packet + 0x22, 0xd4 - 36); // random length-36 but that is what the pioneers do
         packet[0x24] = player_id;
         packet[0x25] = 0x00;
         packet[0x26] = 0x00;       // unknown
@@ -1103,20 +1103,21 @@ cdj_create_status_packet(uint16_t* length, unsigned char model, uint8_t player_i
         packet[0x2a] = 0x01;       // Tr track supports beat grid (we thus have to broadcast beat frames)
 
 
-        packet[0x3a] = 0xa0;
+        packet[0x3a] = 0x00; // why both send 0x00
+        packet[0x3b] = 0x2e; // xdj700 sends 0x32 xdj-1000 sends 0x2e ()
 
         packet[0x37] = 0x05;
-        packet[0x47] = 0x08;
+        packet[0x47] = 0x25; // wtf is this xdj sends 0x25=37 0x21=33
 
         // track id
-        cdj_set_uint32(packet + 0x2c, 0x01); // static 1 for the moment since we don yet support media queries
-        cdj_set_uint32(packet + 0x30, 0x01); // track number
+        cdj_set_uint32(packet + 0x2c, 0x00); // static 0 for the moment since we dont yet support media queries
+        cdj_set_uint32(packet + 0x30, 0x00); // track number
 
 
         packet[0x68] = 0x01; // wtf
         packet[0x73] = 0x04; // SD nomedia
         packet[0x75] = 0x01; // link available (we dont have link yet but without this flag XDJ will not sync)
-        packet[0x78] = 0x01; // wtf
+        packet[0x77] = 0x01; // wtf same on both
         // play mode
         packet[0x7b] = active ? 0x04 : 0x05;       // playing in a loop | paused
 
@@ -1152,10 +1153,17 @@ cdj_create_status_packet(uint16_t* length, unsigned char model, uint8_t player_i
         packet[0x9e] = master ? 0x01 : 0x00;  // Mm Now I am the master
         packet[0x9f] = new_master;  // Mh master handoff, new_master goes here if we get sent a master_req
 
-        cdj_set_uint32(packet + 0xc4, CDJ_PITCH_NORMAL);
+        cdj_set_uint32(packet + 0xc4, CDJ_PITCH_NORMAL);  // this is duplicated !!
         // magic / unknown
         cdj_set_uint32(packet + 0x94, 0x7fffffff);
 
+        //0xa3 09
+        //0xa4 01
+        //0xa5 ff
+        packet[0xa3] = 0x09;
+        packet[0xa4] = 0x01;
+        packet[0xa5] = 0xff;
+        
         packet[0xa6] = 1 + bar_index;
 
         cdj_set_uint32(packet + 0xc8, n);

@@ -149,7 +149,7 @@ vdj_init_net(unsigned char* mac, char* ip_address, struct sockaddr_in* ip_addr, 
 
         if (flags & VDJ_FLAG_PRINT_IP) {
             vdj_mac_addr_to_string(mac, mac_s);
-            printf("vdj: %s/%s\n", ip_address, mac_s);
+            //printf("vdj: %s/%s\n", ip_address, mac_s);
         }
         v->status_counter = 1;
         v->pitch = 0x00100000;
@@ -907,7 +907,7 @@ vdj_handle_managed_beat_unicast_datagram(vdj_t* v, vdj_beat_unicast_ph beat_unic
                     //fprintf(stderr, "master handoff OK\n");
                     cdj_fprint_packet(stderr, packet, length, CDJ_BEAT_PORT);
                 } else {
-                    fprintf(stderr, "error: master handoff failed\n");
+                    //fprintf(stderr, "error: master handoff failed\n");
                     cdj_fprint_packet(stderr, packet, length, CDJ_BEAT_PORT);
                 }
 

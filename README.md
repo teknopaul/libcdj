@@ -11,7 +11,7 @@ N.B for tools written in python head over to [python-prodj-link](https://github.
 
 This project is written in C and seems to compile ok on a [raspbery pi](https://www.raspberrypi.org/), hopefully that makes it interesting for embedded projects.
 
-I intend to get libcdj's sister project [adj](https://github.com/teknopaul/adj) running headless on an rpi.
+libcdj's sister project [adj](https://github.com/teknopaul/adj) runs headless on an rpi.
 
 
 ## Components

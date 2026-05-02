@@ -16,7 +16,7 @@
 
 #define VDJ_FLAG_DEV_DJM          0x08  // pretend to be an DJM device type 2
 #define VDJ_FLAG_DEV_XDJ          0x10  // pretend to be an XDJ
-#define VDJ_FLAG_DEV_CDJ          0x20  // pretend to be an XDJ
+#define VDJ_FLAG_DEV_CDJ          0x20  // pretend to be an CDJ
 #define VDJ_FLAG_AUTO_ID          0x40  // automatically assign an id
 #define VDJ_FLAG_PRINT_IP         0x80  // print resolved ip address to stdout
 
@@ -47,7 +47,7 @@ typedef struct {
     vdj_link_member_t*  link_members[VDJ_MAX_BACKLINE + 1];  // link member in the slot for its player_id, in theory there are 255 slots in the protocol, 32 decks should be enough for Jeff Mills
                                                              // this array always excludes self
     uint32_t            sync_counter;      // used for becoming master its a counter/sequence of all the ever handoffs
-    float               master_bpm;        // bpm of the player thas claims to be beat sync master
+    float               master_bpm;        // bpm of the player that claims to be beat sync master
     uint8_t             master_id;         // this VDJ's opinion as to who is the master (there is negotiation across all the connected players) 0 = no master
     uint8_t             master_new;        // new master being negotiated
 } vdj_backline_t;

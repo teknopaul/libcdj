@@ -34,6 +34,7 @@ static void usage()
     printf("    -i - network interface to use, required if pc has more than one\n");
     printf("    -c - mimic CDJ\n");
     printf("    -x - mimic XDJ\n");
+    printf("    -m - mimic DJM\n");
     printf("    -p - specific player number (default is 5)\n");
     printf("    -a - auto assign player number\n");
     printf("    -h - display this text\n");
@@ -70,13 +71,16 @@ int main (int argc, char* argv[])
     memset(id_map, 0, 127);
 
     int c;
-    while ( ( c = getopt(argc, argv, "p:i:chax") ) != EOF) {
+    while ( ( c = getopt(argc, argv, "p:i:chaxm") ) != EOF) {
         switch (c) {
             case 'x':
                 flags |= VDJ_FLAG_DEV_XDJ;
                 break;
             case 'c':
                 flags |= VDJ_FLAG_DEV_CDJ;
+                break;
+            case 'm':
+                flags |= VDJ_FLAG_DEV_DJM;
                 break;
             case 'p':
                 player_id = atoi(optarg);
