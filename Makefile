@@ -28,11 +28,108 @@ OBJS = target/cdj.o target/vdj_store.o target/vdj_net.o target/vdj_beatout.o tar
        target/vdj_discovery.o target/vdj_pselect.o target/vdj_simple.o \
        target/vdj.o
 
+NFS_OBJS = target/nfs/xdr.o target/nfs/rpc.o target/nfs/utf16.o \
+           target/nfs/portmap_client.o target/nfs/mount_client.o \
+           target/nfs/nfs_client.o
+
 all: target target/libcdj.so target/libvdj.so \
      target/cdj-mon target/cdj-scan target/vdj-mon target/vdj-debug target/vdj target/vdj-1
 
 target:
 	mkdir -p target
+
+target/nfs:
+	mkdir -p target/nfs
+
+target/bin:
+	mkdir -p target/bin
+
+# NFS layer (pure C, no rpc/rpc.h)
+
+target/nfs/xdr.o: src/nfs/xdr.c src/nfs/xdr.h | target/nfs
+	$(CC) $(CFLAGS) -Isrc/nfs -c src/nfs/xdr.c -o $@
+
+target/nfs/rpc.o: src/nfs/rpc.c src/nfs/rpc.h src/nfs/xdr.h | target/nfs
+	$(CC) $(CFLAGS) -Isrc/nfs -c src/nfs/rpc.c -o $@
+
+target/nfs/utf16.o: src/nfs/utf16.c src/nfs/utf16.h | target/nfs
+	$(CC) $(CFLAGS) -Isrc/nfs -c src/nfs/utf16.c -o $@
+
+target/nfs/portmap_client.o: src/nfs/portmap_client.c src/nfs/portmap_client.h \
+                              src/nfs/rpc.h src/nfs/xdr.h | target/nfs
+	$(CC) $(CFLAGS) -Isrc/nfs -c src/nfs/portmap_client.c -o $@
+
+target/nfs/mount_client.o: src/nfs/mount_client.c src/nfs/mount_client.h \
+                            src/nfs/nfs_types.h src/nfs/portmap_client.h | target/nfs
+	$(CC) $(CFLAGS) -Isrc/nfs -c src/nfs/mount_client.c -o $@
+
+target/nfs/nfs_client.o: src/nfs/nfs_client.c src/nfs/nfs_client.h \
+                          src/nfs/nfs_types.h src/nfs/portmap_client.h | target/nfs
+	$(CC) $(CFLAGS) -Isrc/nfs -c src/nfs/nfs_client.c -o $@
+
+target/nfs/fake_pdb.o: src/nfs/fake_pdb.c src/nfs/fake_pdb.h | target/nfs
+	$(CC) $(CFLAGS) -Isrc/nfs -c src/nfs/fake_pdb.c -o $@
+
+target/nfs/pdb.o: src/nfs/pdb.c src/nfs/pdb.h src/nfs/utf16.h | target/nfs
+	$(CC) $(CFLAGS) -Isrc/nfs -c src/nfs/pdb.c -o $@
+
+target/nfs/nfs_server.o: src/nfs/nfs_server.c src/nfs/nfs_server.h \
+                          src/nfs/mount_server.h src/nfs/nfs_client.h | target/nfs
+	$(CC) $(CFLAGS) -Isrc/nfs -c src/nfs/nfs_server.c -o $@
+
+target/nfs/mount_server.o: src/nfs/mount_server.c src/nfs/mount_server.h \
+                            src/nfs/nfs_types.h src/nfs/mount_client.h | target/nfs
+	$(CC) $(CFLAGS) -Isrc/nfs -c src/nfs/mount_server.c -o $@
+
+target/bin/xdj_explore.o: src/bin/xdj_explore.c | target/bin
+	$(CC) $(CFLAGS) -Isrc/nfs -c src/bin/xdj_explore.c -o $@
+
+target/bin/xdj_tracks.o: src/bin/xdj_tracks.c | target/bin
+	$(CC) $(CFLAGS) -Isrc/nfs -c src/bin/xdj_tracks.c -o $@
+
+target/bin/nfs_server_test.o: src/bin/nfs_server_test.c | target/bin
+	$(CC) $(CFLAGS) -Isrc/nfs -c src/bin/nfs_server_test.c -o $@
+
+target/bin/vdj_nfs_main.o: src/bin/vdj_nfs_main.c src/c/vdj_nfs.h | target/bin
+	$(CC) $(CFLAGS) -Isrc/c -Isrc/nfs -c src/bin/vdj_nfs_main.c -o $@
+
+NFS_SERVER_OBJS = $(NFS_OBJS) target/nfs/nfs_server.o target/nfs/mount_server.o \
+                  target/nfs/fake_pdb.o
+
+target/xdj-explore: $(NFS_OBJS) target/bin/xdj_explore.o
+	$(CC) $(CFLAGS) -o $@ $^
+
+target/xdj-tracks: $(NFS_OBJS) target/bin/xdj_tracks.o
+	$(CC) $(CFLAGS) -o $@ $^
+
+target/bin/xdj_pdb.o: src/bin/xdj_pdb.c src/nfs/pdb.h | target/bin
+	$(CC) $(CFLAGS) -Isrc/nfs -c src/bin/xdj_pdb.c -o $@
+
+target/xdj-pdb: $(NFS_OBJS) target/nfs/pdb.o target/bin/xdj_pdb.o
+	$(CC) $(CFLAGS) -o $@ $^
+
+target/nfs-server-test: $(NFS_SERVER_OBJS) target/bin/nfs_server_test.o
+	$(CC) $(CFLAGS) -o $@ $^
+
+VDJ_NFS_OBJS = $(OBJS) $(NFS_SERVER_OBJS) target/nfs/vdj_nfs.o
+
+target/vdj-nfs: $(VDJ_NFS_OBJS) target/bin/vdj_nfs_main.o
+	$(CC) $(CFLAGS) -o $@ $^ -lpthread
+
+nfs: $(NFS_OBJS)
+
+xdj-explore: target/xdj-explore
+
+xdj-tracks: target/xdj-tracks
+
+xdj-pdb: target/xdj-pdb
+
+nfs-server-test: target/nfs-server-test
+
+vdj-nfs: target/vdj-nfs
+
+target/nfs/vdj_nfs.o: src/c/vdj_nfs.c src/c/vdj_nfs.h | target/nfs
+	$(CC) $(CFLAGS) -D_POSIX_C_SOURCE=200809L -Isrc/c -Isrc/nfs -c src/c/vdj_nfs.c -o $@
 
 # Applications
 
@@ -109,7 +206,7 @@ target/libcdj.so: $(LIBCDJ_DEP) $(OBJS)
 target/libvdj.so: $(OBJS) $(LIBVDJ_DEP)
 	$(CC) $(CFLAGS) -shared -rdynamic -o $@ $(LIBVDJ_SRC)
 
-.PHONY: clean install uninstall deb test
+.PHONY: clean install uninstall deb test check
 
 rpc:
 	cd src/x; rpcgen -Sc mount.x
@@ -134,6 +231,8 @@ rpc-readdir:
 	cd src/x; $(CC) -fPIC -DPIC -Wall -o read-dir xdr.o mount_clnt.o nfs_clnt.o vdj_nfs_explore.o
 	src/x/read-dir 169.254.177.253
 
+check: test
+
 test:
 	mkdir -p target/
 	$(CC) -Wall -Wno-unused-variable -Isrc/c -c src/test/test_libcdj.c -o target/test_libcdj.o
@@ -142,6 +241,7 @@ test:
 	sniprun src/test/libcdj_pkts_test.c.snip
 	sniprun src/test/bpm_madness_test.c.snip
 	sniprun src/test/time_diff_test.c.snip
+	sniprun src/test/pdb_parse_test.c.snip
 
 clean:
 	rm -rf target/

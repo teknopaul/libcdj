@@ -6,3 +6,8 @@ doc-internal/
 .sublime-project.sublime-workspace
 *.o
 /src/x/
+.sst/
+src/test/fixtures/*.pdb
+references/
+libcdj.geany
+.sstignore

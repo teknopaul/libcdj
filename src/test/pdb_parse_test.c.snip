@@ -1,0 +1,159 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stdint.h>
+
+#include "../nfs/utf16.h"
+#include "../nfs/fake_pdb.h"
+#include "../nfs/pdb.h"
+
+//SNIP_FILE SNIP_utf16     ../nfs/utf16.c
+//SNIP_FILE SNIP_fake_pdb  ../nfs/fake_pdb.c
+//SNIP_FILE SNIP_pdb       ../nfs/pdb.c
+
+#include "snip_core.h"
+
+/* --- Shared test state --- */
+static int      g_count;
+static char     g_title[256];
+static char     g_filename[256];
+static char     g_file_path[512];
+static uint32_t g_bpm_x100;
+static uint32_t g_duration_secs;
+static uint32_t g_track_id;
+
+static int collect_cb(const pdb_track_t *t, void *ud)
+{
+    (void)ud;
+    g_count++;
+    snprintf(g_title,     sizeof(g_title),     "%s", t->title     ? t->title     : "");
+    snprintf(g_filename,  sizeof(g_filename),  "%s", t->filename  ? t->filename  : "");
+    snprintf(g_file_path, sizeof(g_file_path), "%s", t->file_path ? t->file_path : "");
+    g_bpm_x100      = t->bpm_x100;
+    g_duration_secs = t->duration_secs;
+    g_track_id      = t->id;
+    return 0;
+}
+
+/* Test 1: Parse a fake_pdb — round-trip basic fields */
+static void test_fake_pdb_basic(void)
+{
+    fake_track_t ft = {
+        .title         = "Test Track",
+        .filename      = "test.mp3",
+        .file_path     = "/C/Music/test.mp3",
+        .bpm_x100      = 12345,
+        .duration_secs = 180,
+    };
+    uint32_t len;
+    uint8_t *buf = fake_pdb_generate(&ft, &len);
+
+    g_count = 0;
+    int rc = pdb_parse(buf, len, collect_cb, NULL);
+
+    snip_equals("fake basic: pdb_parse ok",   0, rc);
+    snip_equals("fake basic: one track",       1, g_count);
+    snip_assert("fake basic: title",    strcmp(g_title,    "Test Track")       == 0);
+    snip_assert("fake basic: filename", strcmp(g_filename, "test.mp3")         == 0);
+    snip_assert("fake basic: file_path",strcmp(g_file_path,"/C/Music/test.mp3")== 0);
+    snip_equals("fake basic: bpm_x100", 12345, (int)g_bpm_x100);
+    snip_equals("fake basic: duration", 180,   (int)g_duration_secs);
+
+    free(buf);
+}
+
+/* Test 2: track.id field equals 1 from fake_pdb */
+static void test_fake_pdb_id(void)
+{
+    fake_track_t ft = {
+        .title = "ID Test", .filename = "id.mp3", .file_path = "/C/id.mp3",
+        .bpm_x100 = 10000, .duration_secs = 60,
+    };
+    uint32_t len;
+    uint8_t *buf = fake_pdb_generate(&ft, &len);
+
+    g_count = 0;
+    pdb_parse(buf, len, collect_cb, NULL);
+
+    snip_equals("fake id: one track",   1, g_count);
+    snip_equals("fake id: track_id==1", 1, (int)g_track_id);
+
+    free(buf);
+}
+
+/* Test 3: BPM edge case — zero BPM */
+static void test_bpm_zero(void)
+{
+    fake_track_t ft = {
+        .title = "Silent", .filename = "s.mp3", .file_path = "/C/s.mp3",
+        .bpm_x100 = 0, .duration_secs = 1,
+    };
+    uint32_t len;
+    uint8_t *buf = fake_pdb_generate(&ft, &len);
+
+    g_count = 0;
+    pdb_parse(buf, len, collect_cb, NULL);
+
+    snip_equals("bpm zero: track found", 1, g_count);
+    snip_equals("bpm zero: bpm_x100==0", 0, (int)g_bpm_x100);
+
+    free(buf);
+}
+
+/* Test 4: Bad / short input returns -1 */
+static void test_bad_input(void)
+{
+    uint8_t dummy[4] = {0};
+    snip_equals("bad: null returns -1",  -1, pdb_parse(NULL,  0, collect_cb, NULL));
+    snip_equals("bad: short returns -1", -1, pdb_parse(dummy, 4, collect_cb, NULL));
+}
+
+/* Test 5: Real fixture — count tracks and spot-check last parsed track.
+ * Silently skipped when fixtures/export.pdb is absent. */
+static void test_real_fixture(void)
+{
+    FILE *f = fopen("fixtures/export.pdb", "rb");
+    if (!f) {
+        printf("  [skip] fixtures/export.pdb not found\n");
+        return;
+    }
+    fseek(f, 0, SEEK_END);
+    long sz = ftell(f);
+    rewind(f);
+    uint8_t *buf = malloc((size_t)sz);
+    if (!buf) { fclose(f); return; }
+    fread(buf, 1, (size_t)sz, f);
+    fclose(f);
+
+    g_count = 0;
+    int rc = pdb_parse(buf, (uint32_t)sz, collect_cb, NULL);
+
+    snip_equals("real: pdb_parse ok",       0, rc);
+    snip_assert("real: at least one track",  g_count > 0);
+
+    printf("  real fixture: %d tracks\n",        g_count);
+    printf("  last title:   %s\n",               g_title);
+    printf("  last path:    %s\n",               g_file_path);
+    printf("  last bpm:     %.2f  dur: %us\n",
+           g_bpm_x100 / 100.0, g_duration_secs);
+
+    free(buf);
+}
+
+int main(int argc, char *argv[])
+{
+    (void)argc; (void)argv;
+
+    test_fake_pdb_basic();
+    test_fake_pdb_id();
+    test_bpm_zero();
+    test_bad_input();
+    test_real_fixture();
+
+    if (errors) {
+        fprintf(stdout, "[fail] %d error(s)\n", errors);
+        return 1;
+    }
+    fprintf(stdout, "[pass] pdb_parse_test\n");
+    return 0;
+}
