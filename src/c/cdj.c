@@ -906,7 +906,7 @@ cdj_create_id_use_req_packet(uint16_t* length, unsigned char model, unsigned cha
     uint8_t* packet = (uint8_t*) calloc(1, *length);
     if (packet) {
         cdj_set_header(packet, CDJ_ID_USE_REQ);
-        packet[CDJ_PACKET_TYPE_OFFSET + 1] = 0x01;  /* sub-type: acknowledged variant */
+        packet[CDJ_PACKET_TYPE_OFFSET + 1] = 0x00;  /* sub-type: request (0x01 is the ack variant) */
         cdj_set_model_name(packet + cdj_header_len(50000, CDJ_ID_USE_REQ), model);
         cdj_set_uint16(packet + 0x20, CDJ_DISCOVERY_VERSION);
         cdj_set_uint16(packet + 0x22, *length);
