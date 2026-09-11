@@ -37,6 +37,7 @@ cdj_type_to_string(uint16_t port, uint8_t type, uint8_t sub_type)
                 }
                 case 0x02 : {
                     if (sub_type == 0) return "CDJ_ID_USE_REQ";
+                    if (sub_type == 1) return "CDJ_ID_USE_REQ_ACK";
                 }
                 case 0x03 : {
                     if (sub_type == 0) return "CDJ_ID_USE_RESP";
@@ -905,6 +906,7 @@ cdj_create_id_use_req_packet(uint16_t* length, unsigned char model, unsigned cha
     uint8_t* packet = (uint8_t*) calloc(1, *length);
     if (packet) {
         cdj_set_header(packet, CDJ_ID_USE_REQ);
+        packet[CDJ_PACKET_TYPE_OFFSET + 1] = 0x01;  /* sub-type: acknowledged variant */
         cdj_set_model_name(packet + cdj_header_len(50000, CDJ_ID_USE_REQ), model);
         cdj_set_uint16(packet + 0x20, CDJ_DISCOVERY_VERSION);
         cdj_set_uint16(packet + 0x22, *length);
@@ -967,6 +969,23 @@ uint8_t
 cdj_inc_id_set_req_packet(uint8_t* packet)
 {
     return ++packet[0x25];
+}
+
+uint8_t*
+cdj_create_id_set_resp_packet(uint16_t* length, unsigned char model,
+                               uint8_t player_id, uint8_t reqid)
+{
+    *length = 0x26;
+    uint8_t* packet = (uint8_t*) calloc(1, *length);
+    if (packet) {
+        cdj_set_header(packet, CDJ_ID_SET_RESP);
+        cdj_set_model_name(packet + cdj_header_len(50000, CDJ_DISCOVERY), model);
+        cdj_set_uint16(packet + 0x20, CDJ_DISCOVERY_VERSION);
+        cdj_set_uint16(packet + 0x22, *length);
+        packet[0x24] = player_id;
+        packet[0x25] = reqid;
+    }
+    return packet;
 }
 
 uint8_t*

@@ -25,13 +25,13 @@ timing packet arrives.
 Another possible reason for using TCP is to detect liveness, is aprogram crashes  the kernel will close TCP stream soother decks know faster about userlan software failures.
 Potentially gif beat grid visual representations are sent, these will be longer than UDP packets and maybe some decks have features to render beat grid from multiple decks.
 
-Current UDP packets send informatin about future beat grid points, this is limited to 4 beats ahead, TCP would not have that limitation so that also coule be a use case for TCP 
+Current UDP packets send informatin about future beat grid points, this is limited to 4 beats ahead, TCP would not have that limitation so that also could be a use case for TCP 
 connections.
 
 The database file transfer across the network uses an old NFS protocol, and sends the entire DB in one file.  As dbs get bigger since modern pendrives can hold
 much more data maybe Pioneer hitthe size limits for sending the whole DB, so another potential use case is a better way of transfering partial track information 
 from the database wihtout sending the whole db file.
 
-We know that very new XDJs have added features to the UDP protocol so I dontsuspect that the TCP is a rewrite of the UDP protocol I suspect it will
+We know that very new XDJs have added features to the UDP protocol so I don't suspect that the TCP is a rewrite of the UDP protocol I suspect it will
 only be used for new features that require arbirary length data streams.
 

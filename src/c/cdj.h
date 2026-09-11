@@ -314,6 +314,7 @@ uint8_t* cdj_create_stage1_discovery_packet(uint16_t* length, unsigned char mode
 uint8_t* cdj_create_id_use_req_packet(uint16_t* length, unsigned char model, uint8_t* ip, uint8_t* mac, uint8_t player_id, uint8_t reqid);
 uint8_t* cdj_create_id_use_resp_packet(uint16_t* length, unsigned char model, uint8_t player_id, uint8_t* ip);
 uint8_t* cdj_create_id_set_req_packet(uint16_t* length, unsigned char model, uint8_t player_id, uint8_t reqid);
+uint8_t* cdj_create_id_set_resp_packet(uint16_t* length, unsigned char model, uint8_t player_id, uint8_t reqid);
 
 uint8_t* cdj_create_keepalive_packet(uint16_t* length, unsigned char model, uint8_t* ip, uint8_t* mac, uint8_t player_id, uint8_t member_count);
 uint8_t* cdj_create_id_collision_packet(uint16_t* length, unsigned char model, uint8_t player_id, uint8_t* ip);

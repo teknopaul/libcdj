@@ -361,20 +361,27 @@ vdj_handle_managed_discovery_datagram(vdj_t* v, vdj_discovery_ph discovery_ph, u
             break;
         }
         case CDJ_ID_SET_REQ: {
-            // detect unhandled clash, aka collission aka conflict
-            /*
-            TODO need to filter out packets sent by myself and I cant!! message does not have ip
             if ( (d_pkt = cdj_new_discovery_packet(packet, len)) ) {
-                if (d_pkt->player_id == v->player_id && ! vdj_match_ip(v, d_pkt->ip) ) {
-                    fprintf(stderr, "id collision: %02i\n", d_pkt->player_id);
-                    if ( (resp = cdj_create_id_collision_packet(&length, v->model, v->player_id, v->ip)) ) { 
-                        vdj_sendto_discovery(v, resp, length);
-                        free(resp);
+                /* Respond only to other players, not our own broadcast — filter by player_id */
+                if (d_pkt->player_id != v->player_id && d_pkt->player_id > 0) {
+                    vdj_link_member_t* sender =
+                        v->backline->link_members[d_pkt->player_id];
+                    if (sender && sender->ip_addr) {
+                        uint8_t* resp;
+                        uint16_t rlen;
+                        resp = cdj_create_id_set_resp_packet(&rlen, v->model,
+                                   v->player_id, d_pkt->data[0x25]);
+                        if (resp) {
+                            struct sockaddr_in dest = *sender->ip_addr;
+                            dest.sin_port = htons(CDJ_DISCOVERY_PORT);
+                            vdj_sendto_update(v, &dest, resp, rlen);
+                            free(resp);
+                        }
                     }
                 }
+                if (discovery_ph) discovery_ph(v, d_pkt);
                 free(d_pkt);
             }
-            */
             break;
         }
         case CDJ_KEEP_ALIVE: {
