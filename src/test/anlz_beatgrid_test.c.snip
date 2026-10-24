@@ -1,0 +1,449 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <math.h>
+#include <stdint.h>
+
+#include "../nfs/utf16.h"
+#include "../anlz/anlz.h"
+#include "../anlz/anlz_fake.h"
+
+//SNIP_FILE SNIP_utf16      ../nfs/utf16.c
+//SNIP_FILE SNIP_anlz_core  ../anlz/anlz.c
+//SNIP_FILE SNIP_fake_anlz  ../anlz/anlz_fake.c
+
+#include "snip_core.h"
+
+#define FIX "fixtures/anlz/"
+
+typedef anlz_fake_beat_t fb_t;
+
+static anlz_t *open_fake(anlz_fake_t *b, uint8_t **buf)
+{
+    uint32_t len;
+    anlz_t *a = NULL;
+    *buf = anlz_fake_finish(b, &len);
+    if (anlz_open_mem(*buf, len, &a) != ANLZ_OK) a = NULL;
+    return a;
+}
+
+/* --- path --- */
+
+static void path_case(char *name, const char *utf8)
+{
+    anlz_fake_t *b = anlz_fake_begin();
+    anlz_fake_add_ppth(b, utf8);
+    uint8_t *buf;
+    anlz_t *a = open_fake(b, &buf);
+    const char *p = NULL;
+    if (snip_assert(name, a != NULL)) {
+        snip_equals(name, ANLZ_OK, anlz_path(a, &p));
+        snip_assert(name, p && strcmp(p, utf8) == 0);
+    }
+    anlz_close(a);
+    free(buf);
+}
+
+static void test_path_synthetic(void)
+{
+    path_case("path ascii", "/Contents/Artist/Album/file.mp3");
+    path_case("path non-ascii", "/Contents/Reb\xc5\xabke/Fl\xc3\xbcgel.mp3");
+    path_case("path leading non-ascii", "\xc5\xab/x");
+    path_case("path emoji (surrogate pair)", "/Contents/\xf0\x9f\x8e\xb5.mp3");
+    path_case("path empty", "");
+
+    anlz_fake_t *b = anlz_fake_begin();
+    uint8_t *buf;
+    anlz_t *a = open_fake(b, &buf);
+    const char *p = (const char *)1;
+    snip_equals("path absent", ANLZ_ERR_ABSENT, anlz_path(a, &p));
+    snip_assert("path absent: NULL out", p == NULL);
+    anlz_close(a);
+    free(buf);
+
+    /* PPTH too short for its own header */
+    b = anlz_fake_begin();
+    anlz_fake_add_tag(b, "PPTH", 0x10, (const uint8_t *)"", 0);
+    a = open_fake(b, &buf);
+    snip_equals("path tag too short", ANLZ_ERR_BAD_LEN, anlz_path(a, &p));
+    anlz_close(a);
+    free(buf);
+
+    /* len_path lies (larger than the tag): decode what is there */
+    b = anlz_fake_begin();
+    const uint8_t lie[] = { 0,0,0x10,0, 0,'a', 0,'b', 0,0 };      /* len_path 4096 */
+    anlz_fake_add_tag(b, "PPTH", 0x10, lie, sizeof lie);
+    a = open_fake(b, &buf);
+    snip_equals("path lying len_path", ANLZ_OK, anlz_path(a, &p));
+    snip_assert("path lying len_path: value", p && strcmp(p, "ab") == 0);
+    anlz_close(a);
+    free(buf);
+}
+
+/* --- PQTZ --- */
+
+static void test_pqtz_synthetic(void)
+{
+    const fb_t beats[4] = { {1, 12000, 100}, {2, 12000, 600}, {3, 14000, 1100}, {4, 14000, 1529} };
+    anlz_fake_t *b = anlz_fake_begin();
+    anlz_fake_add_pqtz(b, beats, 4, 4);
+    uint8_t *buf;
+    anlz_t *a = open_fake(b, &buf);
+    anlz_beatgrid_t g;
+    anlz_beat_t x;
+    snip_equals("pqtz: ok", ANLZ_OK, anlz_beatgrid(a, &g));
+    snip_equals("pqtz: source", ANLZ_GRID_PQTZ, (int)g.source);
+    snip_equals("pqtz: count", 4, (int)g.count);
+    snip_assert("pqtz: monotonic", g.monotonic);
+    snip_assert("pqtz: not clamped", !g.clamped);
+    snip_assert("pqtz: no sub ms", !g.has_sub_ms);
+    snip_assert("pqtz: beat 0", anlz_beat_at(&g, 0, &x) && x.beat_number == 1 && x.bpm_x100 == 12000 && x.time_ms == 100 && x.sub_ms_us == 0);
+    snip_assert("pqtz: tempo change", anlz_beat_at(&g, 2, &x) && x.bpm_x100 == 14000 && x.time_ms == 1100);
+    snip_assert("pqtz: last", anlz_beat_at(&g, 3, &x) && x.beat_number == 4 && x.time_ms == 1529);
+    snip_assert("pqtz: past the end", !anlz_beat_at(&g, 4, &x));
+    snip_assert("pqtz: null grid", !anlz_beat_at(NULL, 0, &x));
+
+    snip_equals("for_time before first", -1, anlz_beat_for_time(&g, 99));
+    snip_equals("for_time on first", 0, anlz_beat_for_time(&g, 100));
+    snip_equals("for_time between", 1, anlz_beat_for_time(&g, 1099));
+    snip_equals("for_time on beat", 2, anlz_beat_for_time(&g, 1100));
+    snip_equals("for_time after last", 3, anlz_beat_for_time(&g, 99999));
+    snip_assert("avg bpm", fabs(anlz_avg_bpm(&g) - 60000.0 * 3 / 1429) < 1e-9);
+    anlz_close(a);
+    free(buf);
+}
+
+static void test_pqtz_edge_cases(void)
+{
+    uint8_t *buf;
+    anlz_t *a;
+    anlz_beatgrid_t g;
+    anlz_beat_t x;
+    const fb_t two[2] = { {1, 12000, 100}, {2, 12000, 600} };
+
+    /* len_beats larger than the entries present: clamped and flagged */
+    anlz_fake_t *b = anlz_fake_begin();
+    anlz_fake_add_pqtz(b, two, 2, 1000000);
+    a = open_fake(b, &buf);
+    snip_equals("claims too many: ok", ANLZ_OK, anlz_beatgrid(a, &g));
+    snip_equals("claims too many: clamped count", 2, (int)g.count);
+    snip_assert("claims too many: flag", g.clamped);
+    snip_assert("claims too many: last readable", anlz_beat_at(&g, 1, &x) && x.time_ms == 600);
+    snip_assert("claims too many: beyond", !anlz_beat_at(&g, 2, &x));
+    anlz_close(a);
+    free(buf);
+
+    /* len_beats smaller than the entries: trust len_beats */
+    b = anlz_fake_begin();
+    anlz_fake_add_pqtz(b, two, 2, 1);
+    a = open_fake(b, &buf);
+    snip_equals("claims fewer: count", 1, (int)(anlz_beatgrid(a, &g), g.count));
+    snip_assert("claims fewer: not flagged", !g.clamped);
+    anlz_close(a);
+    free(buf);
+
+    /* empty grid (track not analysed): valid, count 0 */
+    b = anlz_fake_begin();
+    anlz_fake_add_pqtz(b, NULL, 0, 0);
+    a = open_fake(b, &buf);
+    snip_equals("empty grid: ok", ANLZ_OK, anlz_beatgrid(a, &g));
+    snip_equals("empty grid: count", 0, (int)g.count);
+    snip_assert("empty grid: no beat", !anlz_beat_at(&g, 0, &x));
+    snip_equals("empty grid: for_time", -1, anlz_beat_for_time(&g, 1000));
+    snip_assert("empty grid: avg bpm", anlz_avg_bpm(&g) == 0.0);
+    anlz_close(a);
+    free(buf);
+
+    /* tag shorter than its header */
+    b = anlz_fake_begin();
+    anlz_fake_add_tag(b, "PQTZ", 0x18, (const uint8_t *)"\0\0\0\0", 4);
+    a = open_fake(b, &buf);
+    snip_equals("pqtz too short", ANLZ_ERR_BAD_LEN, anlz_beatgrid(a, &g));
+    anlz_close(a);
+    free(buf);
+
+    /* no beat grid tag at all */
+    b = anlz_fake_begin();
+    anlz_fake_add_ppth(b, "/x.mp3");
+    a = open_fake(b, &buf);
+    snip_equals("no grid tag", ANLZ_ERR_ABSENT, anlz_beatgrid(a, &g));
+    anlz_close(a);
+    free(buf);
+
+    /* times going backwards: flagged, lookups still defined */
+    const fb_t back[3] = { {1, 12000, 500}, {2, 12000, 100}, {3, 12000, 900} };
+    b = anlz_fake_begin();
+    anlz_fake_add_pqtz(b, back, 3, 3);
+    a = open_fake(b, &buf);
+    anlz_beatgrid(a, &g);
+    snip_assert("non-monotonic flagged", !g.monotonic);
+    snip_equals("non-monotonic lookup", 2, anlz_beat_for_time(&g, 950));
+    anlz_close(a);
+    free(buf);
+}
+
+/* --- PQT2 --- */
+
+static void test_pqt2_synthetic(void)
+{
+    /* straight line 100 ms .. 1600 ms, 4 beats, tempo 120 */
+    const fb_t first = {1, 12000, 100}, last = {4, 12000, 1600};
+    const uint16_t sub[4] = { 972, 473, 975, 976 };
+    uint8_t *buf;
+    anlz_t *a;
+    anlz_beatgrid_t g;
+    anlz_beat_t x;
+
+    anlz_fake_t *b = anlz_fake_begin();
+    anlz_fake_add_pqt2(b, first, last, 4, sub, 4);
+    a = open_fake(b, &buf);
+    snip_equals("pqt2: ok", ANLZ_OK, anlz_beatgrid(a, &g));
+    snip_equals("pqt2: source", ANLZ_GRID_PQT2, (int)g.source);
+    snip_equals("pqt2: count", 4, (int)g.count);
+    snip_assert("pqt2: has sub ms", g.has_sub_ms);
+    snip_assert("pqt2: monotonic", g.monotonic);
+    snip_assert("pqt2: beat 0", anlz_beat_at(&g, 0, &x) && x.beat_number == 1 && x.bpm_x100 == 12000 && x.time_ms == 100 && x.sub_ms_us == 972);
+    snip_assert("pqt2: beat 1 on the line", anlz_beat_at(&g, 1, &x) && x.beat_number == 2 && x.time_ms >= 599 && x.time_ms <= 601);
+    snip_assert("pqt2: beat 3 anchor", anlz_beat_at(&g, 3, &x) && x.beat_number == 4 && x.time_ms == 1600 && x.sub_ms_us == 976);
+    snip_equals("pqt2: for_time", 1, anlz_beat_for_time(&g, 700));
+    anlz_close(a);
+    free(buf);
+
+    /* count field larger than the data */
+    b = anlz_fake_begin();
+    anlz_fake_add_pqt2(b, first, last, 5000, sub, 4);
+    a = open_fake(b, &buf);
+    snip_equals("pqt2 lies: ok", ANLZ_OK, anlz_beatgrid(a, &g));
+    snip_equals("pqt2 lies: clamped", 4, (int)g.count);
+    snip_assert("pqt2 lies: flag", g.clamped);
+    anlz_close(a);
+    free(buf);
+
+    /* single beat, and zero beats */
+    b = anlz_fake_begin();
+    anlz_fake_add_pqt2(b, first, first, 1, sub, 1);
+    a = open_fake(b, &buf);
+    anlz_beatgrid(a, &g);
+    snip_assert("pqt2 single beat", g.count == 1 && anlz_beat_at(&g, 0, &x) && x.time_ms == 100);
+    anlz_close(a);
+    free(buf);
+    b = anlz_fake_begin();
+    anlz_fake_add_pqt2(b, first, last, 0, sub, 0);
+    a = open_fake(b, &buf);
+    snip_assert("pqt2 zero beats", anlz_beatgrid(a, &g) == ANLZ_OK && g.count == 0 && !anlz_beat_at(&g, 0, &x));
+    anlz_close(a);
+    free(buf);
+}
+
+static void test_attach_sub_ms(void)
+{
+    const fb_t beats[2] = { {1, 12000, 100}, {2, 12000, 600} };
+    const uint16_t sub[2] = { 11, 22 };
+    uint8_t *dbuf, *ebuf, *e2buf;
+    anlz_beatgrid_t g;
+    anlz_beat_t x;
+
+    anlz_fake_t *b = anlz_fake_begin();
+    anlz_fake_add_pqtz(b, beats, 2, 2);
+    anlz_t *dat = open_fake(b, &dbuf);
+    b = anlz_fake_begin();
+    anlz_fake_add_pqt2(b, beats[0], beats[1], 2, sub, 2);
+    anlz_t *ext = open_fake(b, &ebuf);
+    b = anlz_fake_begin();
+    anlz_fake_add_pqt2(b, beats[0], beats[1], 3, sub, 2);          /* count disagrees */
+    anlz_t *ext_bad = open_fake(b, &e2buf);
+
+    anlz_beatgrid(dat, &g);
+    snip_equals("attach: ok", ANLZ_OK, anlz_beatgrid_attach_sub_ms(&g, ext));
+    snip_assert("attach: source stays PQTZ", g.source == ANLZ_GRID_PQTZ && g.has_sub_ms);
+    snip_assert("attach: values", anlz_beat_at(&g, 1, &x) && x.time_ms == 600 && x.sub_ms_us == 22);
+
+    anlz_beatgrid(dat, &g);
+    snip_equals("attach: count mismatch", ANLZ_ERR_BAD_LEN, anlz_beatgrid_attach_sub_ms(&g, ext_bad));
+    snip_assert("attach: mismatch leaves grid alone", !g.has_sub_ms);
+    snip_equals("attach: ext without PQT2", ANLZ_ERR_ABSENT, anlz_beatgrid_attach_sub_ms(&g, dat));
+    anlz_close(dat); anlz_close(ext); anlz_close(ext_bad);
+    free(dbuf); free(ebuf); free(e2buf);
+}
+
+/* --- fixtures --- */
+
+/* bpm_x100 of the track in fixtures/anlz/expected.tsv (written from the real export.pdb); -1 if not found */
+static int expected_bpm(const char *dir_id)       /* e.g. "P042/00015D16" */
+{
+    FILE *f = fopen(FIX "expected.tsv", "r");
+    char line[1024];
+    int bpm = -1;
+    if (!f) return -1;
+    while (fgets(line, sizeof line, f)) {
+        if (line[0] == '#' || !strstr(line, dir_id)) continue;
+        char *tab = strchr(line, '\t');           /* id */
+        if (!tab) break;
+        tab = strchr(tab + 1, '\t');              /* bpm */
+        if (tab) bpm = atoi(tab + 1);
+        break;
+    }
+    fclose(f);
+    return bpm;
+}
+
+typedef struct {
+    const char *file;       /* P042_00015D16 */
+    const char *dir_id;     /* P042/00015D16 */
+    const char *path;
+    uint32_t count, first_ms, last_ms;
+    uint16_t last_number;
+} fixture_t;
+
+static const fixture_t FX[] = {
+    { "P014_00001A7A", "P014/00001A7A", "/Contents/Vladimir Dubyshkin/ivanovo night luxe/nothingburger_(Original_Mix).mp3", 390, 236, 155836, 2 },
+    { "P024_00023562", "P024/00023562", "/Contents/Josh Coakley/The Drums/The_Drums.mp3", 677, 28, 327124, 1 },
+    { "P02A_0000ECBE", "P02A/0000ECBE", "/Contents/UnknownArtist/UnknownAlbum/10SecSilence.mp3", 0, 0, 0, 0 },
+    { "P035_0002765B", "P035/0002765B", "/Contents/Ku De Ta, Nikki Amber/Just Be Good To Me/Just_Be_Good_To_Me_FooR_Remix.mp3", 552, 283, 254592, 4 },
+    { "P042_00015D16", "P042/00015D16", "/Contents/Sex Sells/BABY IT'S ME/Baby_It_s_Me.mp3", 716, 51, 348832, 4 },
+    { "P04B_000145BD", "P04B/000145BD", "/Contents/UnknownArtist/UnknownAlbum/fx_tiamistiam_that-wrecked-the-party.flac", 0, 0, 0, 0 },
+    { "P07D_0001A2E9", "P07D/0001A2E9", "/Contents/Lazy Jay/City Beats, Vol. 5/After_Dark_Dub.mp3", 859, 117, 402304, 3 },
+    { "P004_00028148", "P004/00028148", "/Contents/Intapol/UK Dembow/uk-dembo-whistling-diesel-track-06.mp3", 521, 51, 240050, 1 },
+    { "P00C_0000D1E2", "P00C/0000D1E2", "/Contents/Intapol/UK Dembow/uk-dembo-driver-track-02.mp3", 521, 51, 234637, 1 },
+    { "P022_0002380C", "P022/0002380C", "/Contents/Intapol/UK Dembow/uk-dembow-track-08.mp3", 525, 50, 236441, 1 },
+};
+
+static void check_fixture(const fixture_t *f)
+{
+    char name[128], path[256];
+    anlz_t *dat = NULL, *ext = NULL;
+    anlz_beatgrid_t g, g2;
+    anlz_beat_t x, y;
+    const char *p = NULL;
+
+    snprintf(path, sizeof path, FIX "%s_ANLZ0000.DAT", f->file);
+    snprintf(name, sizeof name, "%s DAT opens", f->file);
+    if (!snip_equals(name, ANLZ_OK, anlz_open_file(path, &dat))) return;
+    snprintf(path, sizeof path, FIX "%s_ANLZ0000.EXT", f->file);
+    snprintf(name, sizeof name, "%s EXT opens", f->file);
+    if (!snip_equals(name, ANLZ_OK, anlz_open_file(path, &ext))) { anlz_close(dat); return; }
+
+    snprintf(name, sizeof name, "%s path", f->file);
+    snip_equals(name, ANLZ_OK, anlz_path(dat, &p));
+    snip_assert(name, p && strcmp(p, f->path) == 0);
+    snprintf(name, sizeof name, "%s EXT path equals DAT path", f->file);
+    snip_assert(name, anlz_path(ext, &p) == ANLZ_OK && strcmp(p, f->path) == 0);
+
+    snprintf(name, sizeof name, "%s grid", f->file);
+    snip_equals(name, ANLZ_OK, anlz_beatgrid(dat, &g));
+    snip_equals(name, ANLZ_GRID_PQTZ, (int)g.source);
+    snprintf(name, sizeof name, "%s count", f->file);
+    snip_equals(name, (int)f->count, (int)g.count);
+    snprintf(name, sizeof name, "%s monotonic, not clamped", f->file);
+    snip_assert(name, g.monotonic && !g.clamped);
+
+    /* the database says the same tempo (expected.tsv holds bpm_x100 from export.pdb) */
+    int bpm = expected_bpm(f->dir_id);
+    snprintf(name, sizeof name, "%s expected.tsv entry", f->file);
+    snip_assert(name, bpm >= 0);
+    if (f->count == 0) {
+        snprintf(name, sizeof name, "%s unanalysed: bpm 0 in the database", f->file);
+        snip_equals(name, 0, bpm);
+        snprintf(name, sizeof name, "%s unanalysed: no PQT2 in EXT", f->file);
+        snip_equals(name, ANLZ_ERR_ABSENT, anlz_beatgrid(ext, &g2));
+        snprintf(name, sizeof name, "%s unanalysed: attach is ABSENT", f->file);
+        snip_equals(name, ANLZ_ERR_ABSENT, anlz_beatgrid_attach_sub_ms(&g, ext));
+        anlz_close(dat);
+        anlz_close(ext);
+        return;
+    }
+
+    snprintf(name, sizeof name, "%s first beat", f->file);
+    snip_assert(name, anlz_beat_at(&g, 0, &x) && x.beat_number == 1 && x.time_ms == f->first_ms && x.bpm_x100 == bpm);
+    snprintf(name, sizeof name, "%s last beat", f->file);
+    snip_assert(name, anlz_beat_at(&g, g.count - 1, &x) && x.time_ms == f->last_ms && x.beat_number == f->last_number);
+    snprintf(name, sizeof name, "%s bar numbering and tempo", f->file);
+    int cycle = 1;
+    for (uint32_t i = 0; i < g.count; i++) {
+        anlz_beat_at(&g, i, &x);
+        if (x.beat_number != (i % 4) + 1 || x.bpm_x100 != bpm) cycle = 0;
+    }
+    snip_assert(name, cycle);
+    snprintf(name, sizeof name, "%s avg bpm near %d", f->file, bpm);
+    snip_assert(name, fabs(anlz_avg_bpm(&g) - bpm / 100.0) < 0.1);
+
+    /* PQT2 straight from the EXT: header anchors equal the PQTZ ends, count equals */
+    snprintf(name, sizeof name, "%s PQT2 grid", f->file);
+    snip_equals(name, ANLZ_OK, anlz_beatgrid(ext, &g2));
+    snip_equals(name, ANLZ_GRID_PQT2, (int)g2.source);
+    snprintf(name, sizeof name, "%s PQT2 count equals PQTZ count", f->file);
+    snip_equals(name, (int)g.count, (int)g2.count);
+    snprintf(name, sizeof name, "%s PQT2 header count == count", f->file);
+    snip_equals(name, (int)g.count, (int)g2.header_count);
+
+    /* reconstruction from PQT2 alone is within 1 ms of the PQTZ times, same numbering and tempo */
+    int ok = 1;
+    uint32_t worst = 0;
+    for (uint32_t i = 0; i < g.count; i++) {
+        anlz_beat_at(&g, i, &x);
+        anlz_beat_at(&g2, i, &y);
+        uint32_t d = x.time_ms > y.time_ms ? x.time_ms - y.time_ms : y.time_ms - x.time_ms;
+        if (d > worst) worst = d;
+        if (d > 1 || x.beat_number != y.beat_number || x.bpm_x100 != y.bpm_x100) ok = 0;
+    }
+    snprintf(name, sizeof name, "%s PQT2-only reconstruction within 1 ms (worst %u)", f->file, worst);
+    snip_assert(name, ok);
+
+    /* attaching PQT2 to the PQTZ grid keeps the PQTZ milliseconds and adds microseconds that agree with the PQT2 line */
+    snprintf(name, sizeof name, "%s attach", f->file);
+    snip_equals(name, ANLZ_OK, anlz_beatgrid_attach_sub_ms(&g, ext));
+    int agree = 1;
+    for (uint32_t i = 0; i < g.count; i++) {
+        anlz_beat_at(&g, i, &x);
+        int64_t ex = (int64_t)x.time_ms * 1000 + x.sub_ms_us;
+        anlz_beat_at(&g2, i, &y);
+        int64_t re = (int64_t)y.time_ms * 1000 + y.sub_ms_us;
+        if (x.sub_ms_us > 999 || llabs(ex - re) > 200) agree = 0;     /* real data: within 0.11 ms */
+    }
+    snprintf(name, sizeof name, "%s PQTZ ms + PQT2 us equals the PQT2 line within 0.2 ms", f->file);
+    snip_assert(name, agree);
+
+    anlz_close(dat);
+    anlz_close(ext);
+}
+
+static void test_fixtures(void)
+{
+    for (size_t i = 0; i < sizeof FX / sizeof FX[0]; i++) check_fixture(&FX[i]);
+
+    /* the anchor track, exact values */
+    anlz_t *dat, *ext;
+    anlz_beatgrid_t g;
+    anlz_beat_t x;
+    anlz_open_file(FIX "P042_00015D16_ANLZ0000.DAT", &dat);
+    anlz_open_file(FIX "P042_00015D16_ANLZ0000.EXT", &ext);
+    anlz_beatgrid(dat, &g);
+    snip_equals("anchor attach", ANLZ_OK, anlz_beatgrid_attach_sub_ms(&g, ext));
+    snip_assert("anchor beat 0: 51 ms + 972 us", anlz_beat_at(&g, 0, &x) && x.time_ms == 51 && x.sub_ms_us == 972);
+    snip_assert("anchor beat 1: 539 ms + 773 us", anlz_beat_at(&g, 1, &x) && x.time_ms == 539 && x.sub_ms_us == 773);
+    snip_assert("anchor beat 2: 1027 ms + 573 us", anlz_beat_at(&g, 2, &x) && x.time_ms == 1027 && x.sub_ms_us == 573);
+    snip_equals("anchor beat_for_time 539", 1, anlz_beat_for_time(&g, 539));
+    snip_equals("anchor beat_for_time 538", 0, anlz_beat_for_time(&g, 538));
+    snip_equals("anchor beat_for_time 1 min", 122, anlz_beat_for_time(&g, 60000));
+    anlz_close(dat);
+    anlz_close(ext);
+}
+
+int main(int argc, char *argv[])
+{
+    (void)argc; (void)argv;
+
+    test_path_synthetic();
+    test_pqtz_synthetic();
+    test_pqtz_edge_cases();
+    test_pqt2_synthetic();
+    test_attach_sub_ms();
+    test_fixtures();
+
+    if (errors) {
+        fprintf(stdout, "[fail] %d error(s)\n", errors);
+        return 1;
+    }
+    fprintf(stdout, "[pass] anlz_beatgrid_test\n");
+    return 0;
+}

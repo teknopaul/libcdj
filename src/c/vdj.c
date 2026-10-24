@@ -19,6 +19,7 @@
  */
 
 #include <pthread.h>
+#include <poll.h>
 #include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -49,6 +50,7 @@
 
 static unsigned _Atomic vdj_discovery_running = ATOMIC_VAR_INIT(0);
 static unsigned _Atomic vdj_beat_running = ATOMIC_VAR_INIT(0);
+static unsigned _Atomic vdj_beat_unicast_running = ATOMIC_VAR_INIT(0); // master handoff DMs
 static unsigned _Atomic vdj_update_running = ATOMIC_VAR_INIT(0);    // read other statuses
 static unsigned _Atomic vdj_status_running = ATOMIC_VAR_INIT(0);    // send status
 
@@ -237,7 +239,7 @@ void
 vdj_send_keepalive(vdj_t* v)
 {
     uint16_t length;
-    // TODO XDJ does not base link member count on keepalives
+    if (v->claiming) return;        // still claiming the player number, real players are silent until the claim is done
     unsigned char* pkt = cdj_create_keepalive_packet(&length, v->model, v->ip, v->mac, v->player_id, 1 + vdj_link_member_count(v));
     if (pkt) {
         vdj_sendto_discovery(v, pkt, length);
@@ -312,6 +314,7 @@ vdj_stop_threads(vdj_t* v)
 {
     vdj_discovery_running = 0;
     vdj_beat_running = 0;
+    vdj_beat_unicast_running = 0;
     vdj_update_running = 0;
     vdj_status_running = 0;
     vdj_stop_keepalive_thread();
@@ -668,6 +671,25 @@ vdj_sendto_discovery(vdj_t* v, unsigned char* packet, uint16_t packet_length)
 }
 
 /**
+ * send a packet from discovery_socket_fd (source port 50000) to dest:50000. Real players answer the claim packets
+ * (the type 0x05 stage 3 acknowledgement) from port 50000 straight away.
+ */
+int
+vdj_sendto_discovery_unicast(vdj_t* v, struct sockaddr_in* dest, unsigned char* packet, uint16_t packet_length)
+{
+    struct sockaddr_in d;
+
+    if (v->discovery_socket_fd == 0 || dest == NULL) return CDJ_ERROR;
+    memcpy(&d, dest, sizeof(struct sockaddr_in));
+    d.sin_port = (in_port_t)htons(CDJ_DISCOVERY_PORT);
+    if (sendto(v->discovery_socket_fd, packet, packet_length, 0, (struct sockaddr*) &d, sizeof(struct sockaddr_in)) == -1) {
+        fprintf(stderr, "error: unicast:50000 %s\n", strerror(errno));
+        return CDJ_ERROR;
+    }
+    return CDJ_OK;
+}
+
+/**
  * send a packet from beat_socket_fd to broadcast:50001
  * used to send out beat timing
  */
@@ -921,6 +943,92 @@ vdj_handle_managed_beat_unicast_datagram(vdj_t* v, vdj_beat_unicast_ph beat_unic
 }
 
 
+// managed beat unicast thread, receives direct messages on the beat port: master handoff requests and responses
+
+#define VDJ_UNICAST_POLL_MS 200
+
+static void*
+vdj_managed_beat_unicast_loop(void* arg)
+{
+    vdj_thread_info* tinfo = arg;
+    vdj_beat_unicast_ph beat_unicast_ph = tinfo->handler;
+    vdj_t* v = tinfo->v;
+
+    ssize_t len;
+    int rc;
+    unsigned char packet[1500];
+    struct pollfd pfd;
+
+    pfd.fd = v->beat_unicast_socket_fd;
+    pfd.events = POLLIN;
+
+    // poll with a timeout so vdj_stop_managed_beat_unicast_thread() takes effect without a packet arriving or closing the socket
+    while (vdj_beat_unicast_running) {
+        rc = poll(&pfd, 1, VDJ_UNICAST_POLL_MS);
+        if (rc == 0) continue;
+        if (rc == -1) {
+            if (errno == EINTR) continue;
+            fprintf(stderr, "vdj: beat unicast poll error '%s'\n", strerror(errno));
+            break;
+        }
+        if (pfd.revents & (POLLERR | POLLHUP | POLLNVAL)) {
+            fprintf(stderr, "vdj: beat unicast socket closed\n");
+            break;
+        }
+        len = recv(v->beat_unicast_socket_fd, packet, 1500, 0);
+        if (len == -1) {
+            if (errno == EINTR || errno == EAGAIN) continue;
+            fprintf(stderr, "vdj: beat unicast socket read error '%s'\n", strerror(errno));
+            break;
+        }
+        if ( ! cdj_validate_header(packet, len) ) vdj_handle_managed_beat_unicast_datagram(v, beat_unicast_ph, packet, len);
+    }
+    vdj_beat_unicast_running = 0;
+    free(tinfo);
+    return NULL;
+}
+
+/**
+ * Start a thread listening on the unicast beat socket (ip:50001) for master handoff messages.
+ * Requires vdj_open_sockets(). beat_unicast_ph may be NULL.
+ *
+ * @return CDJ_OK on success, CDJ_ERROR if already running, sockets are not open, or the thread could not be created.
+ */
+int
+vdj_init_managed_beat_unicast_thread(vdj_t* v, vdj_beat_unicast_ph beat_unicast_ph)
+{
+    pthread_t thread_id;
+    vdj_thread_info* tinfo;
+
+    if (vdj_beat_unicast_running) return CDJ_ERROR;
+    if (v->beat_unicast_socket_fd <= 0) return CDJ_ERROR;
+
+    tinfo = (vdj_thread_info*) calloc(1, sizeof(vdj_thread_info));
+    if (!tinfo) return CDJ_ERROR;
+    tinfo->v = v;
+    tinfo->handler = beat_unicast_ph;
+
+    // set before the thread starts so that an immediate stop is not lost
+    vdj_beat_unicast_running = 1;
+    if (pthread_create(&thread_id, NULL, &vdj_managed_beat_unicast_loop, tinfo)) {
+        vdj_beat_unicast_running = 0;
+        free(tinfo);
+        return CDJ_ERROR;
+    }
+    pthread_detach(thread_id);
+    return CDJ_OK;
+}
+
+/**
+ * Ask the thread to stop, it exits within VDJ_UNICAST_POLL_MS.
+ * Does not close the socket, wait a little before vdj_close_sockets().
+ */
+void
+vdj_stop_managed_beat_unicast_thread(vdj_t* v)
+{
+    vdj_beat_unicast_running = 0;
+}
+
 // cleint managed updates
 
 static void*
@@ -1132,7 +1240,8 @@ vdj_link_member_count(vdj_t* v)
     unsigned char c = 0;
     if (v->backline) {
         for (i = 1; i <= VDJ_MAX_BACKLINE; i++) {
-            if (v->backline->link_members[i] && v->backline->link_members[i]->active) {
+            // alive, not "active": m->active is the player's playing state and is overwritten by every status packet
+            if (v->backline->link_members[i] && !v->backline->link_members[i]->gone) {
                 c++;
             }
         }

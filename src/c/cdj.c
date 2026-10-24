@@ -1200,6 +1200,31 @@ cdj_create_status_packet(uint16_t* length, unsigned char model, uint8_t player_i
         cdj_set_uint32(packet + 0xc8, n);
         packet[0xcc] = 0x0f;  // 0x0f I am nexus, 0x05 I am older
 
+        if (!active) {
+            // Not playing: look like an idle player with nothing loaded, byte for byte what the XDJ-700s send (capture
+            // prolink-3-boots). A status that claims a track loaded from ourselves makes the players query our portmapper
+            // and mountd (UDP 111, GETPORT 100005) to read our media, and we have no NFS server behind it.
+            packet[0x28] = 0x00;   // no loaded player
+            packet[0x29] = 0x00;
+            packet[0x2a] = 0x00;   // no track
+            packet[0x37] = 0x00;
+            packet[0x3b] = 0x00;
+            packet[0x47] = 0x00;
+            packet[0x6a] = 0x04;   // media slots: unloaded
+            packet[0x6b] = 0x04;
+            packet[0x6f] = 0x04;
+            packet[0x75] = 0x00;
+            packet[0x77] = 0x00;
+            packet[0x7b] = 0x00;   // play mode: no track
+            packet[0x8b] = 0xfe;
+            cdj_set_uint16(packet + 0x90, 0x7fff);
+            cdj_set_uint16(packet + 0x92, 0xffff);    // no bpm
+            packet[0x9d] = 0x00;
+            memset(packet + 0xa0, 0xff, 4);           // no beat number
+            packet[0xb6] = 0x01;
+            packet[0xcd] = 0x01;
+        }
+
     }
     return packet;
 }

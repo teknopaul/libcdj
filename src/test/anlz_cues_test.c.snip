@@ -1,0 +1,441 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stdint.h>
+
+#include "../nfs/utf16.h"
+#include "../anlz/anlz.h"
+#include "../anlz/anlz_fake.h"
+
+//SNIP_FILE SNIP_utf16      ../nfs/utf16.c
+//SNIP_FILE SNIP_anlz_core  ../anlz/anlz.c
+//SNIP_FILE SNIP_fake_anlz  ../anlz/anlz_fake.c
+
+#include "snip_core.h"
+
+#define FIX "fixtures/anlz/"
+
+typedef anlz_fake_cue_t fc_t;
+
+static anlz_t *open_fake(anlz_fake_t *b, uint8_t **buf)
+{
+    uint32_t len;
+    anlz_t *a = NULL;
+    *buf = anlz_fake_finish(b, &len);
+    if (anlz_open_mem(*buf, len, &a) != ANLZ_OK) a = NULL;
+    return a;
+}
+
+static void tput32(uint8_t *p, uint32_t v)
+{
+    p[0] = (uint8_t)(v >> 24); p[1] = (uint8_t)(v >> 16); p[2] = (uint8_t)(v >> 8); p[3] = (uint8_t)v;
+}
+
+/* --- synthetic --- */
+
+static void test_pcob_synthetic(void)
+{
+    const fc_t hot[4] = {
+        { .hot_cue = 2, .time_ms = 5000, .status = 1 },
+        { .hot_cue = 1, .time_ms = 1000, .status = 1, .is_loop = 1, .loop_time_ms = 2000 },
+        { .hot_cue = 3, .time_ms = 9000, .status = 1 },
+        { .hot_cue = 0, .time_ms = 3000 },                    /* not valid in a hot list but must not crash */
+    };
+    const fc_t mem[2] = { { .hot_cue = 0, .time_ms = 8000 }, { .hot_cue = 0, .time_ms = 700 } };
+    anlz_fake_t *b = anlz_fake_begin();
+    anlz_fake_add_pcob(b, 1, hot, 3, 3);
+    anlz_fake_add_pcob(b, 0, mem, 2, 2);
+    uint8_t *buf;
+    anlz_t *a = open_fake(b, &buf);
+    anlz_cue_list_t l;
+
+    snip_equals("pcob hot: ok", ANLZ_OK, anlz_cues(a, ANLZ_CUES_HOT, &l));
+    snip_equals("pcob hot: count", 3, (int)l.count);
+    snip_assert("pcob hot: sorted by hot_cue", l.cues[0].hot_cue == 1 && l.cues[1].hot_cue == 2 && l.cues[2].hot_cue == 3);
+    snip_assert("pcob hot: loop fields", l.cues[0].is_loop && l.cues[0].time_ms == 1000 && l.cues[0].loop_time_ms == 2000);
+    snip_assert("pcob hot: point has no loop end", !l.cues[1].is_loop && l.cues[1].loop_time_ms == 0 && l.cues[1].time_ms == 5000);
+    snip_assert("pcob hot: from PCPT", !l.cues[0].from_pco2 && l.cues[0].status == 1 && l.cues[0].comment[0] == 0);
+    snip_assert("pcob hot: not damaged", !l.damaged);
+    anlz_cue_list_free(&l);
+    snip_assert("free clears", l.cues == NULL && l.count == 0);
+
+    snip_equals("pcob mem: ok", ANLZ_OK, anlz_cues(a, ANLZ_CUES_MEMORY, &l));
+    snip_assert("pcob mem: sorted by time", l.count == 2 && l.cues[0].time_ms == 700 && l.cues[1].time_ms == 8000);
+    anlz_cue_list_free(&l);
+
+    snip_equals("pcob all: ok", ANLZ_OK, anlz_cues(a, ANLZ_CUES_ALL, &l));
+    snip_assert("pcob all: memory first then hot", l.count == 5 && l.cues[0].hot_cue == 0 && l.cues[1].hot_cue == 0 && l.cues[2].hot_cue == 1);
+    anlz_cue_list_free(&l);
+    snip_equals("bad kind", ANLZ_ERR_BAD_LEN, anlz_cues(a, (anlz_cue_kind_t)7, &l));
+    anlz_close(a);
+    free(buf);
+}
+
+static void test_pco2_synthetic(void)
+{
+    const fc_t cues[4] = {
+        { .hot_cue = 1, .time_ms = 1000 },
+        { .hot_cue = 2, .time_ms = 2000, .is_loop = 1, .loop_time_ms = 6000, .loop_num = 4, .loop_den = 1,
+          .comment = "Drop" },
+        { .hot_cue = 3, .time_ms = 3000, .comment = "Reb\xc5\xabke \xf0\x9f\x8e\xb5", .has_rgb = 1,
+          .color_code = 7, .red = 255, .green = 0, .blue = 23, .color_id = 5, .raw_1d = { 3, 0, 0xe9 } },
+        { .hot_cue = 4, .time_ms = 4000, .has_rgb = 1, .red = 1, .green = 2, .blue = 3 },
+    };
+    anlz_fake_t *b = anlz_fake_begin();
+    anlz_fake_add_pco2(b, 1, cues, 4, 4);
+    anlz_fake_add_pco2(b, 0, NULL, 0, 0);
+    uint8_t *buf;
+    anlz_t *a = open_fake(b, &buf);
+    anlz_cue_list_t l;
+
+    snip_equals("pco2: ok", ANLZ_OK, anlz_cues(a, ANLZ_CUES_HOT, &l));
+    snip_equals("pco2: count", 4, (int)l.count);
+    snip_assert("pco2: from PCP2", l.cues[0].from_pco2 && l.cues[0].status == 0);
+    snip_assert("pco2: plain cue", l.cues[0].time_ms == 1000 && !l.cues[0].is_loop && l.cues[0].comment[0] == 0 && !l.cues[0].has_rgb);
+    snip_assert("pco2: loop + comment", l.cues[1].is_loop && l.cues[1].loop_time_ms == 6000 && l.cues[1].loop_num == 4
+                && l.cues[1].loop_den == 1 && strcmp(l.cues[1].comment, "Drop") == 0);
+    snip_assert("pco2: non-ascii comment + colour", strcmp(l.cues[2].comment, "Reb\xc5\xabke \xf0\x9f\x8e\xb5") == 0
+                && l.cues[2].has_rgb && l.cues[2].color_code == 7 && l.cues[2].red == 255 && l.cues[2].green == 0
+                && l.cues[2].blue == 23 && l.cues[2].color_id == 5 && l.cues[2].raw_1d[0] == 3 && l.cues[2].raw_1d[2] == 0xe9);
+    snip_assert("pco2: colour without comment", l.cues[3].has_rgb && l.cues[3].red == 1 && l.cues[3].green == 2
+                && l.cues[3].blue == 3 && l.cues[3].comment[0] == 0);
+    anlz_cue_list_free(&l);
+    snip_equals("pco2 mem: empty", ANLZ_OK, anlz_cues(a, ANLZ_CUES_MEMORY, &l));
+    snip_equals("pco2 mem: count", 0, (int)l.count);
+    anlz_cue_list_free(&l);
+    anlz_close(a);
+    free(buf);
+}
+
+static void test_pco2_wins_over_pcob(void)
+{
+    const fc_t pcob[1] = { { .hot_cue = 1, .time_ms = 111 } };
+    const fc_t pco2[2] = { { .hot_cue = 1, .time_ms = 111 }, { .hot_cue = 4, .time_ms = 444 } };
+    anlz_fake_t *b = anlz_fake_begin();
+    anlz_fake_add_pcob(b, 1, pcob, 1, 1);
+    anlz_fake_add_pco2(b, 1, pco2, 2, 2);
+    uint8_t *buf;
+    anlz_t *a = open_fake(b, &buf);
+    anlz_cue_list_t l;
+    snip_equals("both: ok", ANLZ_OK, anlz_cues(a, ANLZ_CUES_ALL, &l));
+    snip_assert("both: PCO2 used (all cues, once)", l.count == 2 && l.cues[0].from_pco2 && l.cues[1].hot_cue == 4);
+    anlz_cue_list_free(&l);
+    anlz_close(a);
+    free(buf);
+}
+
+static void test_no_cue_tags(void)
+{
+    anlz_fake_t *b = anlz_fake_begin();
+    anlz_fake_add_ppth(b, "/x.mp3");
+    uint8_t *buf;
+    anlz_t *a = open_fake(b, &buf);
+    anlz_cue_list_t l = { 5, NULL, 1 };
+    snip_equals("no cue tags", ANLZ_ERR_ABSENT, anlz_cues(a, ANLZ_CUES_ALL, &l));
+    snip_assert("no cue tags: list cleared", l.count == 0 && l.cues == NULL && !l.damaged);
+    snip_equals("null args", ANLZ_ERR_BAD_LEN, anlz_cues(NULL, ANLZ_CUES_ALL, &l));
+    anlz_cue_list_free(NULL);
+    anlz_close(a);
+    free(buf);
+}
+
+static void test_malformed(void)
+{
+    const fc_t two[2] = { { .hot_cue = 1, .time_ms = 100 }, { .hot_cue = 2, .time_ms = 200 } };
+    uint8_t *buf;
+    anlz_t *a;
+    anlz_cue_list_t l;
+
+    /* len_cues claims 5 but only 2 entries exist */
+    anlz_fake_t *b = anlz_fake_begin();
+    anlz_fake_add_pcob(b, 1, two, 2, 5);
+    a = open_fake(b, &buf);
+    snip_equals("pcob claims too many: ok", ANLZ_OK, anlz_cues(a, ANLZ_CUES_HOT, &l));
+    snip_assert("pcob claims too many: entries kept, flagged", l.count == 2 && l.damaged);
+    anlz_cue_list_free(&l);
+    anlz_close(a);
+    free(buf);
+
+    b = anlz_fake_begin();
+    anlz_fake_add_pco2(b, 1, two, 2, 60000);
+    a = open_fake(b, &buf);
+    snip_assert("pco2 claims too many", anlz_cues(a, ANLZ_CUES_HOT, &l) == ANLZ_OK && l.count == 2 && l.damaged);
+    anlz_cue_list_free(&l);
+    anlz_close(a);
+    free(buf);
+
+    /* len_cues claims fewer than present: only the claimed number is read */
+    b = anlz_fake_begin();
+    anlz_fake_add_pco2(b, 1, two, 2, 1);
+    a = open_fake(b, &buf);
+    snip_assert("pco2 claims fewer", anlz_cues(a, ANLZ_CUES_HOT, &l) == ANLZ_OK && l.count == 1 && !l.damaged);
+    anlz_cue_list_free(&l);
+    anlz_close(a);
+    free(buf);
+
+    /* len_entry smaller than its own header: must stop (not loop), earlier entries kept */
+    b = anlz_fake_begin();
+    anlz_fake_add_pco2(b, 1, two, 2, 2);
+    uint32_t len;
+    uint8_t *f = anlz_fake_finish(b, &len);
+    tput32(f + 28 + 0x14 + 0x2c + 8, 5);               /* second entry's len_entry := 5 */
+    snip_equals("tiny len_entry: opens", ANLZ_OK, anlz_open_mem(f, len, &a));
+    snip_assert("tiny len_entry", anlz_cues(a, ANLZ_CUES_HOT, &l) == ANLZ_OK && l.count == 1 && l.damaged);
+    anlz_cue_list_free(&l);
+    anlz_close(a);
+
+    tput32(f + 28 + 0x14 + 0x2c + 8, 0x7fffffff);      /* huge len_entry */
+    anlz_open_mem(f, len, &a);
+    snip_assert("huge len_entry", anlz_cues(a, ANLZ_CUES_HOT, &l) == ANLZ_OK && l.count == 1 && l.damaged);
+    anlz_cue_list_free(&l);
+    anlz_close(a);
+
+    memcpy(f + 28 + 0x14 + 0x2c, "XXXX", 4);         /* wrong fourcc in the entry */
+    anlz_open_mem(f, len, &a);
+    snip_assert("wrong entry fourcc", anlz_cues(a, ANLZ_CUES_HOT, &l) == ANLZ_OK && l.count == 1 && l.damaged);
+    anlz_cue_list_free(&l);
+    anlz_close(a);
+    free(f);
+
+    /* PCO2 entry exactly 0x2c long with a lying len_comment, odd len_comment, comment longer than the entry */
+    b = anlz_fake_begin();
+    const fc_t one[1] = { { .hot_cue = 1, .time_ms = 100, .comment = "abcdef" } };
+    anlz_fake_add_pco2(b, 1, one, 1, 1);
+    f = anlz_fake_finish(b, &len);
+    tput32(f + 28 + 0x14 + 0x28, 0x7fffff);            /* len_comment huge: clamp to the entry */
+    anlz_open_mem(f, len, &a);
+    snip_assert("lying len_comment", anlz_cues(a, ANLZ_CUES_HOT, &l) == ANLZ_OK && l.count == 1 && !l.damaged
+                && strncmp(l.cues[0].comment, "abcdef", 6) == 0 && !l.cues[0].has_rgb);
+    anlz_cue_list_free(&l);
+    anlz_close(a);
+    tput32(f + 28 + 0x14 + 0x28, 5);                   /* odd length */
+    anlz_open_mem(f, len, &a);
+    snip_assert("odd len_comment", anlz_cues(a, ANLZ_CUES_HOT, &l) == ANLZ_OK && l.count == 1 && strcmp(l.cues[0].comment, "ab") == 0);
+    anlz_cue_list_free(&l);
+    anlz_close(a);
+    free(f);
+
+    /* a very long comment is truncated, never overflows */
+    char longc[400];
+    memset(longc, 'x', sizeof longc - 1);
+    longc[sizeof longc - 1] = 0;
+    const fc_t big[1] = { { .hot_cue = 1, .time_ms = 1, .comment = longc } };
+    b = anlz_fake_begin();
+    anlz_fake_add_pco2(b, 1, big, 1, 1);
+    a = open_fake(b, &buf);
+    snip_assert("long comment truncated", anlz_cues(a, ANLZ_CUES_HOT, &l) == ANLZ_OK && l.count == 1
+                && strlen(l.cues[0].comment) == 85);
+    anlz_cue_list_free(&l);
+    anlz_close(a);
+    free(buf);
+}
+
+/* --- fixtures --- */
+
+typedef struct { uint8_t hot, loop; uint32_t time, loop_end; } expect_t;
+
+static int check_list(const char *what, const anlz_cue_list_t *l, const expect_t *e, uint32_t n)
+{
+    char msg[160];
+    snprintf(msg, sizeof msg, "%s: count %u", what, n);
+    if (!snip_equals(msg, (int)n, (int)l->count)) return 0;
+    for (uint32_t i = 0; i < n; i++) {
+        snprintf(msg, sizeof msg, "%s: cue %u (hot %u, time %u)", what, i, e[i].hot, e[i].time);
+        snip_assert(msg, l->cues[i].hot_cue == e[i].hot && l->cues[i].is_loop == e[i].loop
+                    && l->cues[i].time_ms == e[i].time && l->cues[i].loop_time_ms == e[i].loop_end);
+    }
+    return 1;
+}
+
+static anlz_t *open_fx(const char *file, const char *ext)
+{
+    char path[256];
+    anlz_t *a = NULL;
+    snprintf(path, sizeof path, FIX "%s_ANLZ0000.%s", file, ext);
+    if (anlz_open_file(path, &a) != ANLZ_OK) { printf("[error] cannot open %s\n", path); errors++; return NULL; }
+    return a;
+}
+
+static int cue_key_cmp(const void *x, const void *y)
+{
+    const anlz_cue_t *a = x, *b = y;
+    if (a->hot_cue != b->hot_cue) return a->hot_cue < b->hot_cue ? -1 : 1;
+    return (a->time_ms > b->time_ms) - (a->time_ms < b->time_ms);
+}
+
+static void check_fixture_expectations(const char *file, const expect_t *e, uint32_t n)
+{
+    anlz_t *dat = open_fx(file, "DAT"), *ext = open_fx(file, "EXT");
+    anlz_cue_list_t d, x;
+    char msg[160];
+    if (!dat || !ext) { anlz_close(dat); anlz_close(ext); return; }
+
+    snprintf(msg, sizeof msg, "%s EXT cues", file);
+    snip_equals(msg, ANLZ_OK, anlz_cues(ext, ANLZ_CUES_HOT, &x));
+    snprintf(msg, sizeof msg, "%s EXT (PCO2)", file);
+    check_list(msg, &x, e, n);
+    snip_assert("EXT cues come from PCO2", n == 0 || x.cues[0].from_pco2);
+
+    /* DAT lists at most the first 3 hot cues, as PCPT */
+    snprintf(msg, sizeof msg, "%s DAT cues", file);
+    snip_equals(msg, ANLZ_OK, anlz_cues(dat, ANLZ_CUES_HOT, &d));
+    uint32_t expect_dat = n > 3 ? 3 : n;
+    snprintf(msg, sizeof msg, "%s DAT (PCOB)", file);
+    check_list(msg, &d, e, expect_dat);
+    snip_assert("DAT cues come from PCPT with status 1", expect_dat == 0 || (!d.cues[0].from_pco2 && d.cues[0].status == 1));
+
+    /* the cue sets agree: every cue is in both lists with the same position and loop end */
+    for (uint32_t i = 0; i < d.count; i++) {
+        snprintf(msg, sizeof msg, "%s DAT cue %u equals PCO2 cue", file, i);
+        snip_assert(msg, d.cues[i].hot_cue == x.cues[i].hot_cue && d.cues[i].time_ms == x.cues[i].time_ms
+                    && d.cues[i].is_loop == x.cues[i].is_loop && d.cues[i].loop_time_ms == x.cues[i].loop_time_ms);
+    }
+    anlz_cue_list_free(&d);
+    anlz_cue_list_free(&x);
+
+    snprintf(msg, sizeof msg, "%s no memory points", file);
+    snip_assert(msg, anlz_cues(ext, ANLZ_CUES_MEMORY, &x) == ANLZ_OK && x.count == 0);
+    anlz_cue_list_free(&x);
+    snip_assert("ALL equals HOT without memory points", anlz_cues(ext, ANLZ_CUES_ALL, &x) == ANLZ_OK && x.count == n);
+    anlz_cue_list_free(&x);
+
+    /* the EXT PCOB lists (cues beyond the third) plus the DAT PCOB lists together equal the PCO2 list */
+    uint32_t pcob_total = 0;
+    anlz_cue_list_t merged = { 0, calloc(8, sizeof(anlz_cue_t)), 0 };
+    for (int f = 0; f < 2; f++) {
+        anlz_t *a = f ? ext : dat;
+        for (uint32_t i = 0; anlz_find_tag(a, "PCOB", i); i++) {
+            /* read one PCOB through the public API by wrapping it in a file with only that tag */
+            const anlz_tag_t *t = anlz_find_tag(a, "PCOB", i);
+            anlz_fake_t *b = anlz_fake_begin();
+            anlz_fake_add_tag(b, "PCOB", t->len_header, t->data + 12, t->len_tag - 12);
+            uint8_t *buf;
+            anlz_t *one = open_fake(b, &buf);
+            anlz_cue_list_t l;
+            if (anlz_cues(one, ANLZ_CUES_ALL, &l) == ANLZ_OK)
+                for (uint32_t k = 0; k < l.count && pcob_total < 8; k++) merged.cues[pcob_total++] = l.cues[k];
+            anlz_cue_list_free(&l);
+            anlz_close(one);
+            free(buf);
+        }
+    }
+    qsort(merged.cues, pcob_total, sizeof(anlz_cue_t), cue_key_cmp);
+    snprintf(msg, sizeof msg, "%s DAT PCOB + EXT PCOB = PCO2 (%u cues)", file, n);
+    snip_equals(msg, (int)n, (int)pcob_total);
+    for (uint32_t i = 0; i < pcob_total && i < n; i++)
+        snip_assert(msg, merged.cues[i].hot_cue == e[i].hot && merged.cues[i].time_ms == e[i].time);
+    free(merged.cues);
+
+    anlz_close(dat);
+    anlz_close(ext);
+}
+
+static void test_fixtures(void)
+{
+    /* values are the big-endian words of the real entries (see MANIFEST.text) */
+    const expect_t p042[] = { { 1, 1, 31271, 39076 } };
+    const expect_t p014[] = { { 1, 0, 6, 0 }, { 2, 0, 38406, 0 } };
+    const expect_t p07d[] = { { 1, 0, 30117, 0 }, { 2, 0, 93867, 0 }, { 3, 0, 161367, 0 }, { 4, 0, 247617, 0 } };
+    const expect_t p024[] = { { 1, 1, 28, 7770 }, { 2, 1, 77447, 85189 }, { 3, 0, 216802, 0 } };
+    const expect_t p035[] = { { 1, 0, 74137, 0 } };
+
+    check_fixture_expectations("P042_00015D16", p042, 1);
+    check_fixture_expectations("P014_00001A7A", p014, 2);
+    check_fixture_expectations("P07D_0001A2E9", p07d, 4);
+    check_fixture_expectations("P024_00023562", p024, 3);
+    check_fixture_expectations("P035_0002765B", p035, 1);
+    /* second export: loops of 16 and 8 beats, the first cue of each track has marker 150 */
+    const expect_t p004[] = { { 1, 0, 5, 0 }, { 2, 1, 14820, 22205 }, { 3, 0, 73897, 0 } };
+    const expect_t p00c[] = { { 1, 0, 4, 0 }, { 2, 1, 57795, 61404 }, { 3, 0, 144412, 0 } };
+    const expect_t p022[] = { { 1, 0, 4, 0 }, { 2, 0, 43359, 0 } };
+    check_fixture_expectations("P004_00028148", p004, 3);
+    check_fixture_expectations("P00C_0000D1E2", p00c, 3);
+    check_fixture_expectations("P022_0002380C", p022, 2);
+    check_fixture_expectations("P02A_0000ECBE", NULL, 0);     /* unanalysed: no cues */
+    check_fixture_expectations("P04B_000145BD", NULL, 0);
+
+    anlz_t *ext;
+    anlz_cue_list_t l;
+
+    /* loop length in beats, from the PCP2 numerator/denominator */
+    ext = open_fx("P042_00015D16", "EXT");
+    anlz_cues(ext, ANLZ_CUES_HOT, &l);
+    snip_assert("P042: 16/1 loop, no colour, no comment", l.count == 1 && l.cues[0].loop_num == 16 && l.cues[0].loop_den == 1
+                && !l.cues[0].has_rgb && l.cues[0].comment[0] == 0 && l.cues[0].color_id == 0);
+    anlz_cue_list_free(&l);
+    anlz_close(ext);
+
+    ext = open_fx("P024_00023562", "EXT");
+    anlz_cues(ext, ANLZ_CUES_HOT, &l);
+    snip_assert("P024: loops 16/1, point has no loop", l.count == 3 && l.cues[0].loop_num == 16 && l.cues[1].loop_den == 1
+                && l.cues[2].loop_num == 0);
+    anlz_cue_list_free(&l);
+    anlz_close(ext);
+
+    /* loop length in beats: 16/1 and 8/1 (16 beats at 130 BPM = 7385 ms, 8 beats at 133 BPM = 3609 ms) */
+    ext = open_fx("P004_00028148", "EXT");
+    anlz_cues(ext, ANLZ_CUES_HOT, &l);
+    snip_assert("P004: loop 16/1 over 7385 ms", l.count == 3 && l.cues[1].is_loop && l.cues[1].loop_num == 16 && l.cues[1].loop_den == 1
+                && l.cues[1].loop_time_ms - l.cues[1].time_ms == 7385);
+    snip_assert("P004: marker 150 on cue A, 1000 on the others", l.cues[0].marker == 150 && l.cues[1].marker == 1000 && l.cues[2].marker == 1000);
+    anlz_cue_list_free(&l);
+    anlz_close(ext);
+    ext = open_fx("P00C_0000D1E2", "EXT");
+    anlz_cues(ext, ANLZ_CUES_HOT, &l);
+    snip_assert("P00C: loop 8/1 over 3609 ms", l.count == 3 && l.cues[1].is_loop && l.cues[1].loop_num == 8 && l.cues[1].loop_den == 1
+                && l.cues[1].loop_time_ms - l.cues[1].time_ms == 3609);
+    anlz_cue_list_free(&l);
+    anlz_close(ext);
+    /* the DAT PCPT carries the same marker */
+    ext = open_fx("P004_00028148", "DAT");
+    anlz_cues(ext, ANLZ_CUES_HOT, &l);
+    snip_assert("P004 DAT: marker 150 on cue A", l.count == 3 && l.cues[0].marker == 150 && l.cues[1].marker == 1000);
+    anlz_cue_list_free(&l);
+    anlz_close(ext);
+    ext = open_fx("P042_00015D16", "EXT");
+    anlz_cues(ext, ANLZ_CUES_HOT, &l);
+    snip_assert("first export: marker is always 1000", l.count == 1 && l.cues[0].marker == 1000);
+    anlz_cue_list_free(&l);
+    anlz_close(ext);
+
+    /* a cue with colour bytes: 00 ff 00 17 after an empty comment */
+    ext = open_fx("P035_0002765B", "EXT");
+    anlz_cues(ext, ANLZ_CUES_HOT, &l);
+    snip_assert("P035: RGB bytes", l.count == 1 && l.cues[0].has_rgb && l.cues[0].color_code == 0 && l.cues[0].red == 0xff
+                && l.cues[0].green == 0x00 && l.cues[0].blue == 0x17);
+    snip_assert("P035: raw 0x1d..0x1f is 03 00 00", l.cues[0].raw_1d[0] == 3 && l.cues[0].raw_1d[1] == 0 && l.cues[0].raw_1d[2] == 0);
+    anlz_cue_list_free(&l);
+    anlz_close(ext);
+
+    /* P07D: four cues with a colour-ish byte at 0x1f (e9, d2, bc, a5) but no trailing RGB */
+    ext = open_fx("P07D_0001A2E9", "EXT");
+    anlz_cues(ext, ANLZ_CUES_HOT, &l);
+    snip_assert("P07D: raw bytes", l.count == 4 && l.cues[0].raw_1d[0] == 3 && l.cues[0].raw_1d[2] == 0xe9
+                && l.cues[1].raw_1d[2] == 0xd2 && l.cues[2].raw_1d[2] == 0xbc && l.cues[3].raw_1d[2] == 0xa5 && !l.cues[0].has_rgb);
+    anlz_cue_list_free(&l);
+    anlz_close(ext);
+
+    /* the EXT of a 4-cue track has a PCOB with the 4th cue; without PCO2 that would be all the EXT offers */
+    ext = open_fx("P07D_0001A2E9", "EXT");
+    snip_assert("P07D EXT: second PCOB-type tags present", anlz_find_tag(ext, "PCOB", 0) != NULL && anlz_find_tag(ext, "PCO2", 1) != NULL);
+    anlz_close(ext);
+}
+
+int main(int argc, char *argv[])
+{
+    (void)argc; (void)argv;
+
+    test_pcob_synthetic();
+    test_pco2_synthetic();
+    test_pco2_wins_over_pcob();
+    test_no_cue_tags();
+    test_malformed();
+    test_fixtures();
+
+    if (errors) {
+        fprintf(stdout, "[fail] %d error(s)\n", errors);
+        return 1;
+    }
+    fprintf(stdout, "[pass] anlz_cues_test\n");
+    return 0;
+}

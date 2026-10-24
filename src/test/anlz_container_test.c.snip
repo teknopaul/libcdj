@@ -1,0 +1,343 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stdint.h>
+
+#include "../nfs/utf16.h"
+#include "../anlz/anlz.h"
+#include "../anlz/anlz_fake.h"
+
+//SNIP_FILE SNIP_utf16      ../nfs/utf16.c
+//SNIP_FILE SNIP_anlz_core  ../anlz/anlz.c
+//SNIP_FILE SNIP_fake_anlz  ../anlz/anlz_fake.c
+
+#include "snip_core.h"
+
+#define FIX "fixtures/anlz/"
+
+static const uint8_t BODY8[8] = { 1, 2, 3, 4, 5, 6, 7, 8 };
+
+static void tput32(uint8_t *p, uint32_t v)
+{
+    p[0] = (uint8_t)(v >> 24); p[1] = (uint8_t)(v >> 16); p[2] = (uint8_t)(v >> 8); p[3] = (uint8_t)v;
+}
+
+/* --- synthetic files --- */
+
+static void test_empty_file(void)
+{
+    anlz_fake_t *b = anlz_fake_begin();
+    uint32_t len;
+    uint8_t *f = anlz_fake_finish(b, &len);
+    anlz_t *a;
+    snip_equals("empty: opens", ANLZ_OK, anlz_open_mem(f, len, &a));
+    snip_equals("empty: no tags", 0, (int)anlz_tag_count(a));
+    snip_assert("empty: not damaged", !anlz_is_damaged(a));
+    snip_assert("empty: len_file ok", anlz_file_len_ok(a));
+    snip_assert("empty: find none", anlz_find_tag(a, "PQTZ", 0) == NULL);
+    snip_assert("empty: tag_at out of range", anlz_tag_at(a, 0) == NULL);
+    anlz_close(a);
+    free(f);
+}
+
+static void test_three_tags(void)
+{
+    anlz_fake_t *b = anlz_fake_begin();
+    anlz_fake_add_tag(b, "PPTH", 0x10, BODY8, 8);
+    anlz_fake_add_tag(b, "PCOB", 0x18, BODY8, 4);
+    anlz_fake_add_tag(b, "ZZZZ", 0x10, BODY8, 0);      /* unknown fourcc */
+    anlz_fake_add_tag(b, "PCOB", 0x18, BODY8, 8);
+    uint32_t len;
+    uint8_t *f = anlz_fake_finish(b, &len);
+
+    anlz_t *a;
+    snip_equals("three: opens", ANLZ_OK, anlz_open_mem(f, len, &a));
+    snip_equals("three: count", 4, (int)anlz_tag_count(a));
+    const anlz_tag_t *t = anlz_tag_at(a, 0);
+    snip_assert("three: first fourcc", t && strcmp(t->fourcc, "PPTH") == 0);
+    snip_equals("three: first offset", 28, (int)t->offset);
+    snip_equals("three: first len_header", 0x10, (int)t->len_header);
+    snip_equals("three: first len_tag", 20, (int)t->len_tag);
+    snip_assert("three: data points into buffer", t->data == f + 28);
+    snip_equals("three: body byte", 1, t->data[12]);
+
+    t = anlz_tag_at(a, 1);
+    snip_equals("three: second offset", 48, (int)t->offset);
+    t = anlz_tag_at(a, 2);
+    snip_assert("three: unknown fourcc listed", strcmp(t->fourcc, "ZZZZ") == 0);
+    snip_equals("three: empty-body tag len", 12, (int)t->len_tag);
+
+    const anlz_tag_t *c0 = anlz_find_tag(a, "PCOB", 0);
+    const anlz_tag_t *c1 = anlz_find_tag(a, "PCOB", 1);
+    snip_assert("three: find first PCOB", c0 && c0->len_tag == 16);
+    snip_assert("three: find second PCOB", c1 && c1->len_tag == 20);
+    snip_assert("three: no third PCOB", anlz_find_tag(a, "PCOB", 2) == NULL);
+    snip_assert("three: NULL fourcc", anlz_find_tag(a, NULL, 0) == NULL);
+    snip_assert("three: not damaged", !anlz_is_damaged(a));
+    anlz_close(a);
+    free(f);
+}
+
+static void test_not_anlz(void)
+{
+    uint8_t buf[64];
+    anlz_t *a = (anlz_t *)1;
+    memset(buf, 0, sizeof buf);
+    snip_equals("null data", ANLZ_ERR_TRUNC, anlz_open_mem(NULL, 100, &a));
+    snip_assert("null data: out cleared", a == NULL);
+    snip_equals("short", ANLZ_ERR_TRUNC, anlz_open_mem(buf, 27, &a));
+    snip_equals("zero length", ANLZ_ERR_TRUNC, anlz_open_mem(buf, 0, &a));
+    memcpy(buf, "PMNG", 4);
+    snip_equals("wrong magic (USBMNG.DAT)", ANLZ_ERR_MAGIC, anlz_open_mem(buf, sizeof buf, &a));
+    memcpy(buf, "PMAI", 4);
+    tput32(buf + 4, 0x1b);
+    snip_equals("file header too short", ANLZ_ERR_BAD_LEN, anlz_open_mem(buf, sizeof buf, &a));
+    tput32(buf + 4, 65);
+    snip_equals("file header past eof", ANLZ_ERR_BAD_LEN, anlz_open_mem(buf, sizeof buf, &a));
+    snip_equals("null out", ANLZ_ERR_BAD_LEN, anlz_open_mem(buf, sizeof buf, NULL));
+    anlz_close(NULL);   /* must not crash */
+}
+
+/* Build a file, then poke the len_tag of the tag at offset 28. */
+static void damaged_case(char *name, uint32_t bad_len_tag, anlz_err_t expect_first_only, int expect_tags)
+{
+    anlz_fake_t *b = anlz_fake_begin();
+    anlz_fake_add_tag(b, "PPTH", 0x10, BODY8, 8);
+    anlz_fake_add_tag(b, "PQTZ", 0x18, BODY8, 8);
+    uint32_t len;
+    uint8_t *f = anlz_fake_finish(b, &len);
+    tput32(f + 28 + 20 + 8, bad_len_tag);    /* second tag: offset 48 */
+
+    anlz_t *a = NULL;
+    anlz_err_t err = anlz_open_mem(f, len, &a);
+    snip_equals(name, ANLZ_OK, err);
+    if (err == ANLZ_OK) {
+        snip_equals(name, expect_tags, (int)anlz_tag_count(a));
+        snip_assert(name, anlz_is_damaged(a));
+        snip_assert(name, anlz_find_tag(a, "PPTH", 0) != NULL);    /* earlier tag still usable */
+    }
+    anlz_close(a);
+
+    /* same damage on the FIRST tag: nothing usable, so open fails */
+    tput32(f + 28 + 8, bad_len_tag);
+    snip_equals(name, expect_first_only, anlz_open_mem(f, len, &a));
+    snip_assert(name, a == NULL);
+    free(f);
+}
+
+static void test_damaged_tags(void)
+{
+    damaged_case("len_tag 0", 0, ANLZ_ERR_BAD_LEN, 1);
+    damaged_case("len_tag 11", 11, ANLZ_ERR_BAD_LEN, 1);
+    damaged_case("len_tag 0xffffffff", 0xffffffffu, ANLZ_ERR_TRUNC, 1);
+    damaged_case("len_tag past eof", 41, ANLZ_ERR_TRUNC, 1);
+}
+
+static void test_trailing_bytes(void)
+{
+    anlz_fake_t *b = anlz_fake_begin();
+    anlz_fake_add_tag(b, "PPTH", 0x10, BODY8, 8);
+    uint32_t len;
+    uint8_t *f = anlz_fake_finish(b, &len);
+    uint8_t *g = malloc(len + 5);
+    memcpy(g, f, len);
+    memset(g + len, 0xAA, 5);                  /* 5 stray bytes: less than a tag header */
+    anlz_t *a;
+    snip_equals("trailing: opens", ANLZ_OK, anlz_open_mem(g, len + 5, &a));
+    snip_equals("trailing: one tag", 1, (int)anlz_tag_count(a));
+    snip_assert("trailing: damaged", anlz_is_damaged(a));
+    snip_assert("trailing: len_file now wrong", !anlz_file_len_ok(a));
+    anlz_close(a);
+    free(g);
+    free(f);
+}
+
+static void test_len_file_lies(void)
+{
+    anlz_fake_t *b = anlz_fake_begin();
+    anlz_fake_add_tag(b, "PPTH", 0x10, BODY8, 8);
+    uint32_t len;
+    uint8_t *f = anlz_fake_finish(b, &len);
+    tput32(f + 8, len + 1000);
+    anlz_t *a;
+    snip_equals("len_file lies: still opens", ANLZ_OK, anlz_open_mem(f, len, &a));
+    snip_assert("len_file lies: flag", !anlz_file_len_ok(a));
+    snip_assert("len_file lies: not damaged", !anlz_is_damaged(a));
+    snip_equals("len_file lies: tags", 1, (int)anlz_tag_count(a));
+    anlz_close(a);
+    free(f);
+}
+
+static void test_open_file_errors(void)
+{
+    anlz_t *a;
+    snip_equals("missing file", ANLZ_ERR_IO, anlz_open_file(FIX "does-not-exist.DAT", &a));
+    snip_equals("null path", ANLZ_ERR_IO, anlz_open_file(NULL, &a));
+    snip_assert("strerror", strcmp(anlz_strerror(ANLZ_ERR_MAGIC), "not an ANLZ file (bad magic)") == 0);
+}
+
+/* --- real fixtures --- */
+
+static const char *FIXTURES[] = {
+    "P014_00001A7A", "P024_00023562", "P02A_0000ECBE", "P035_0002765B",
+    "P042_00015D16", "P04B_000145BD", "P07D_0001A2E9",
+    "P004_00028148", "P00C_0000D1E2", "P022_0002380C",
+};
+
+/* The manifest (written by an independent scanner) holds, under "<file>  N bytes ...", one line:
+ *   "    PPTH@28(h0x10,l178) PVBR@206(h0x10,l1620) ..."   */
+static int manifest_tags(const char *file, char *out, size_t outlen)
+{
+    FILE *f = fopen(FIX "MANIFEST.text", "r");
+    if (!f) return 0;
+    char line[4096];
+    size_t flen = strlen(file);
+    int found = 0;
+    while (fgets(line, sizeof line, f)) {
+        if (strncmp(line, file, flen) == 0 && line[flen] == ' ') {
+            if (fgets(line, sizeof line, f)) {
+                char *p = line;
+                while (*p == ' ') p++;
+                p[strcspn(p, "\n")] = 0;
+                snprintf(out, outlen, "%s", p);
+                found = 1;
+            }
+            break;
+        }
+    }
+    fclose(f);
+    return found;
+}
+
+static void check_fixture(const char *name)
+{
+    char path[256], msg[256], expected[4096], got[4096];
+    snprintf(path, sizeof path, FIX "%s", name);
+    anlz_t *a;
+    anlz_err_t err = anlz_open_file(path, &a);
+    snprintf(msg, sizeof msg, "fixture %s opens", name);
+    if (!snip_equals(msg, ANLZ_OK, err)) return;
+
+    snprintf(msg, sizeof msg, "fixture %s not damaged", name);
+    snip_assert(msg, !anlz_is_damaged(a));
+    snprintf(msg, sizeof msg, "fixture %s len_file == size", name);
+    snip_assert(msg, anlz_file_len_ok(a));
+
+    got[0] = 0;
+    uint64_t sum = 28;                        /* len_header of the file, 0x1c in every real file */
+    for (uint32_t i = 0; i < anlz_tag_count(a); i++) {
+        const anlz_tag_t *t = anlz_tag_at(a, i);
+        char one[64];
+        snprintf(one, sizeof one, "%s%s@%u(h0x%x,l%u)", i ? " " : "", t->fourcc, t->offset, t->len_header, t->len_tag);
+        strncat(got, one, sizeof got - strlen(got) - 1);
+        sum += t->len_tag;
+    }
+    snprintf(msg, sizeof msg, "fixture %s has a manifest entry", name);
+    if (snip_assert(msg, manifest_tags(name, expected, sizeof expected))) {
+        snprintf(msg, sizeof msg, "fixture %s tag list equals manifest", name);
+        if (!snip_assert(msg, strcmp(got, expected) == 0))
+            printf("    got:      %s\n    expected: %s\n", got, expected);
+    }
+    /* tags tile the file exactly: the last tag ends at EOF */
+    const anlz_tag_t *last = anlz_tag_at(a, anlz_tag_count(a) - 1);
+    snprintf(msg, sizeof msg, "fixture %s tags tile the file", name);
+    snip_assert(msg, last && sum == (uint64_t)last->offset + last->len_tag);
+    anlz_close(a);
+}
+
+static void test_fixtures(void)
+{
+    for (size_t i = 0; i < sizeof FIXTURES / sizeof FIXTURES[0]; i++) {
+        char name[128];
+        snprintf(name, sizeof name, "%s_ANLZ0000.DAT", FIXTURES[i]);
+        check_fixture(name);
+        snprintf(name, sizeof name, "%s_ANLZ0000.EXT", FIXTURES[i]);
+        check_fixture(name);
+    }
+
+    /* tag set per extension */
+    anlz_t *a;
+    snip_equals("anchor DAT opens", ANLZ_OK, anlz_open_file(FIX "P042_00015D16_ANLZ0000.DAT", &a));
+    snip_equals("anchor DAT tag count", 7, (int)anlz_tag_count(a));
+    snip_assert("anchor DAT has PQTZ", anlz_find_tag(a, "PQTZ", 0) != NULL);
+    snip_assert("anchor DAT has 2 PCOB", anlz_find_tag(a, "PCOB", 1) != NULL && !anlz_find_tag(a, "PCOB", 2));
+    snip_assert("anchor DAT has no PQT2", anlz_find_tag(a, "PQT2", 0) == NULL);
+    anlz_close(a);
+    snip_equals("anchor EXT opens", ANLZ_OK, anlz_open_file(FIX "P042_00015D16_ANLZ0000.EXT", &a));
+    snip_equals("anchor EXT tag count", 9, (int)anlz_tag_count(a));
+    snip_assert("anchor EXT has PQT2", anlz_find_tag(a, "PQT2", 0) != NULL);
+    snip_assert("anchor EXT has PWV5", anlz_find_tag(a, "PWV5", 0) != NULL);
+    anlz_close(a);
+    snip_equals("PVB2 EXT opens", ANLZ_OK, anlz_open_file(FIX "P04B_000145BD_ANLZ0000.EXT", &a));
+    snip_assert("PVB2 EXT has PVB2", anlz_find_tag(a, "PVB2", 0) != NULL);
+    snip_assert("PVB2 EXT has no PQT2", anlz_find_tag(a, "PQT2", 0) == NULL);
+    anlz_close(a);
+
+    /* USBMNG.DAT is not an ANLZ file */
+    snip_equals("USBMNG head rejected", ANLZ_ERR_MAGIC, anlz_open_file(FIX "USBMNG_head.DAT", &a));
+    snip_assert("USBMNG head: out is NULL", a == NULL);
+}
+
+/* --- utf16be_decode --- */
+
+static void test_utf16be(void)
+{
+    char out[64];
+    const uint8_t ascii[] = { 0,'/', 0,'C', 0,'o', 0,'n', 0,0 };      /* trailing NUL code unit */
+    snip_equals("be ascii ok", 0, utf16be_decode(ascii, sizeof ascii, out, sizeof out));
+    snip_assert("be ascii", strcmp(out, "/Con") == 0);
+
+    const uint8_t uuml[] = { 0,'R', 0,'e', 0,'b', 0x01,0x6B, 0,'k', 0,'e' };   /* Rebuke with u macron */
+    utf16be_decode(uuml, sizeof uuml, out, sizeof out);
+    snip_assert("be non-ascii", strcmp(out, "Reb\xc5\xabke") == 0);
+
+    const uint8_t lead[] = { 0x01,0x6B, 0,'x' };
+    utf16be_decode(lead, sizeof lead, out, sizeof out);
+    snip_assert("be leading non-ascii", strcmp(out, "\xc5\xabx") == 0);
+
+    const uint8_t pair[] = { 0xD8,0x3C, 0xDF,0xB5 };                    /* U+1F3B5 */
+    utf16be_decode(pair, sizeof pair, out, sizeof out);
+    snip_assert("be surrogate pair", strcmp(out, "\xf0\x9f\x8e\xb5") == 0);
+
+    const uint8_t lone[] = { 0xD8,0x3C, 0,'a' };
+    utf16be_decode(lone, sizeof lone, out, sizeof out);
+    snip_assert("be lone surrogate -> U+FFFD", strcmp(out, "\xef\xbf\xbd" "a") == 0);
+
+    const uint8_t odd[] = { 0,'a', 0,'b', 0 };                          /* odd length: last byte ignored */
+    utf16be_decode(odd, sizeof odd, out, sizeof out);
+    snip_assert("be odd byte count", strcmp(out, "ab") == 0);
+
+    const uint8_t nonul[] = { 0,'a', 0,'b' };
+    utf16be_decode(nonul, sizeof nonul, out, sizeof out);
+    snip_assert("be no NUL", strcmp(out, "ab") == 0);
+
+    const uint8_t early[] = { 0,'a', 0,0, 0,'b' };
+    utf16be_decode(early, sizeof early, out, sizeof out);
+    snip_assert("be stops at NUL", strcmp(out, "a") == 0);
+
+    snip_equals("be dst too small", -1, utf16be_decode(ascii, sizeof ascii, out, 4));
+    snip_equals("be empty", 0, utf16be_decode(ascii, 0, out, sizeof out));
+    snip_assert("be empty string", out[0] == 0);
+}
+
+int main(int argc, char *argv[])
+{
+    (void)argc; (void)argv;
+
+    test_empty_file();
+    test_three_tags();
+    test_not_anlz();
+    test_damaged_tags();
+    test_trailing_bytes();
+    test_len_file_lies();
+    test_open_file_errors();
+    test_fixtures();
+    test_utf16be();
+
+    if (errors) {
+        fprintf(stdout, "[fail] %d error(s)\n", errors);
+        return 1;
+    }
+    fprintf(stdout, "[pass] anlz_container_test\n");
+    return 0;
+}

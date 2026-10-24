@@ -1,0 +1,240 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stdint.h>
+#include <unistd.h>
+
+#include "../nfs/utf16.h"
+#include "../anlz/anlz.h"
+#include "../anlz/anlz_fake.h"
+
+//SNIP_FILE SNIP_utf16      ../nfs/utf16.c
+//SNIP_FILE SNIP_anlz_core  ../anlz/anlz.c
+//SNIP_FILE SNIP_fake_anlz  ../anlz/anlz_fake.c
+
+#include "snip_core.h"
+
+#define FIX "fixtures/anlz/"
+
+static const char *FILES[] = {
+    "P014_00001A7A_ANLZ0000.DAT", "P014_00001A7A_ANLZ0000.EXT", "P024_00023562_ANLZ0000.DAT", "P024_00023562_ANLZ0000.EXT",
+    "P02A_0000ECBE_ANLZ0000.DAT", "P02A_0000ECBE_ANLZ0000.EXT", "P035_0002765B_ANLZ0000.DAT", "P035_0002765B_ANLZ0000.EXT",
+    "P042_00015D16_ANLZ0000.DAT", "P042_00015D16_ANLZ0000.EXT", "P04B_000145BD_ANLZ0000.DAT", "P04B_000145BD_ANLZ0000.EXT",
+    "P07D_0001A2E9_ANLZ0000.DAT", "P07D_0001A2E9_ANLZ0000.EXT", "USBMNG_head.DAT",
+    "P004_00028148_ANLZ0000.DAT", "P004_00028148_ANLZ0000.EXT", "P00C_0000D1E2_ANLZ0000.DAT", "P00C_0000D1E2_ANLZ0000.EXT",
+    "P022_0002380C_ANLZ0000.DAT", "P022_0002380C_ANLZ0000.EXT",
+};
+#define NFILES (sizeof FILES / sizeof FILES[0])
+
+static uint8_t *g_data[NFILES];
+static uint32_t g_len[NFILES];
+
+static void load_all(void)
+{
+    for (size_t i = 0; i < NFILES; i++) {
+        char path[256];
+        snprintf(path, sizeof path, FIX "%s", FILES[i]);
+        FILE *f = fopen(path, "rb");
+        if (!f) { printf("[error] cannot read %s\n", path); exit(1); }
+        fseek(f, 0, SEEK_END);
+        g_len[i] = (uint32_t)ftell(f);
+        rewind(f);
+        g_data[i] = malloc(g_len[i]);
+        if (fread(g_data[i], 1, g_len[i], f) != g_len[i]) exit(1);
+        fclose(f);
+    }
+}
+
+static unsigned long g_sink;     /* keeps the reads from being optimised away */
+
+/* Touch everything the API can reach. Must neither crash nor read out of bounds, whatever the bytes are. */
+static void exercise(const uint8_t *buf, uint32_t len, uint32_t wave_stride)
+{
+    anlz_t *a;
+    if (anlz_open_mem(buf, len, &a) != ANLZ_OK) return;
+
+    for (uint32_t i = 0; i < anlz_tag_count(a); i++) {
+        const anlz_tag_t *t = anlz_tag_at(a, i);
+        g_sink += t->data[0] + t->data[t->len_tag - 1];          /* the whole tag is readable */
+    }
+    g_sink += anlz_is_damaged(a) + anlz_file_len_ok(a);
+
+    const char *path;
+    if (anlz_path(a, &path) == ANLZ_OK) g_sink += strlen(path);
+
+    anlz_beatgrid_t g;
+    if (anlz_beatgrid(a, &g) == ANLZ_OK) {
+        anlz_beat_t b;
+        for (uint32_t i = 0; i < g.count; i++) {
+            anlz_beat_at(&g, i, &b);
+            g_sink += b.time_ms + b.sub_ms_us;
+        }
+        g_sink += (unsigned long)anlz_beat_for_time(&g, 123456) + (unsigned long)anlz_avg_bpm(&g);
+        g_sink += (unsigned long)anlz_beat_for_time(&g, 0);
+        anlz_beatgrid_attach_sub_ms(&g, a);                      /* attaching a file's own PQT2 to itself */
+    }
+
+    for (int kind = 0; kind < 3; kind++)
+        for (int pco2 = 0; pco2 < 2; pco2++) {
+            anlz_cue_list_t l;
+            if (anlz_cues_from(a, (anlz_cue_kind_t)kind, pco2, &l) == ANLZ_OK) {
+                for (uint32_t i = 0; i < l.count; i++) g_sink += l.cues[i].time_ms + strlen(l.cues[i].comment);
+                anlz_cue_list_free(&l);
+            }
+        }
+
+    for (int k = ANLZ_WAVE_PREVIEW; k <= ANLZ_WAVE_3BAND_DETAIL; k++) {
+        anlz_waveform_t w;
+        if (anlz_waveform(a, (anlz_wave_kind_t)k, &w) != ANLZ_OK) continue;
+        anlz_wave_column_t c;
+        for (uint32_t i = 0; i < w.count; i += (i < 64 || w.count - i < 64) ? 1 : wave_stride) {
+            anlz_wave_column(&w, i, &c);
+            g_sink += c.height + c.raw[0];
+        }
+        g_sink += (unsigned long)anlz_wave_index_for_time(&w, 5000, 200000);
+    }
+    anlz_close(a);
+}
+
+/* heap copy of exactly n bytes so AddressSanitizer notices any read past the end */
+static void exercise_copy(const uint8_t *src, uint32_t n, uint32_t wave_stride)
+{
+    uint8_t *copy = malloc(n ? n : 1);
+    if (n) memcpy(copy, src, n);
+    exercise(copy, n, wave_stride);
+    free(copy);
+}
+
+static void test_intact_files(void)
+{
+    for (size_t i = 0; i < NFILES; i++) exercise_copy(g_data[i], g_len[i], 1);
+    snip_assert("intact files exercised", 1);
+}
+
+/* Cut every file at (nearly) every length */
+static void test_truncation(void)
+{
+    unsigned long cuts = 0;
+    for (size_t f = 0; f < NFILES; f++) {
+        uint32_t stride = g_len[f] < 20000 ? 1 : 7;
+        for (uint32_t n = 0; n <= g_len[f]; n += stride) {
+            exercise_copy(g_data[f], n, 31);
+            cuts++;
+        }
+        exercise_copy(g_data[f], g_len[f] - 1, 31);
+    }
+    char msg[100];
+    snprintf(msg, sizeof msg, "truncated %lu times without a crash", cuts);
+    snip_assert(msg, cuts > 20000);
+}
+
+static uint64_t g_rng = 0x9E3779B97F4A7C15ull;
+static uint32_t rnd(void)
+{
+    g_rng ^= g_rng << 13; g_rng ^= g_rng >> 7; g_rng ^= g_rng << 17;
+    return (uint32_t)(g_rng >> 11);
+}
+
+/* Offsets worth hitting: the file header and every tag header (first 0x40 bytes of each tag). */
+static uint32_t pick_offset(const uint8_t *data, uint32_t len, const uint32_t *tag_offsets, uint32_t ntags)
+{
+    uint32_t r = rnd() % 10;
+    if (r < 3 || ntags == 0) return rnd() % len;
+    uint32_t t = tag_offsets[rnd() % ntags];
+    uint32_t off = t + rnd() % 0x40;
+    (void)data;
+    return off < len ? off : rnd() % len;
+}
+
+static void test_mutation(void)
+{
+    const char *seed_env = getenv("ANLZ_FUZZ_SEED");
+    if (seed_env) g_rng = strtoull(seed_env, NULL, 10) | 1;
+    printf("  mutation seed %llu (override with ANLZ_FUZZ_SEED)\n", (unsigned long long)g_rng);
+    unsigned long runs = 0;
+
+    for (size_t f = 0; f < NFILES; f++) {
+        anlz_t *a;
+        uint32_t offsets[64], n = 0;
+        if (anlz_open_mem(g_data[f], g_len[f], &a) == ANLZ_OK) {
+            for (uint32_t i = 0; i < anlz_tag_count(a) && n < 64; i++) offsets[n++] = anlz_tag_at(a, i)->offset;
+            anlz_close(a);
+        }
+        offsets[n < 64 ? n : 63] = 0;
+        uint32_t iterations = g_len[f] > 100000 ? 400 : 1500;
+        uint8_t *copy = malloc(g_len[f]);
+        for (uint32_t it = 0; it < iterations; it++) {
+            memcpy(copy, g_data[f], g_len[f]);
+            uint32_t flips = 1 + rnd() % 8;
+            for (uint32_t k = 0; k < flips; k++) {
+                uint32_t off = pick_offset(copy, g_len[f], offsets, n);
+                uint32_t how = rnd() % 4;
+                if (how == 0) copy[off] = (uint8_t)rnd();
+                else if (how == 1) copy[off] ^= (uint8_t)(1u << (rnd() % 8));
+                else if (how == 2) copy[off] = 0xff;
+                else copy[off] = 0;
+            }
+            alarm(10);                                      /* a hang is a failure: SIGALRM kills the test */
+            exercise_copy(copy, g_len[f], 97);
+            alarm(0);
+            runs++;
+        }
+        free(copy);
+    }
+    char msg[100];
+    snprintf(msg, sizeof msg, "%lu mutated files without a crash or hang", runs);
+    snip_assert(msg, runs > 10000);
+}
+
+/* Lengths that are plausible attack values in every length field of a synthetic file */
+static void test_hostile_lengths(void)
+{
+    static const uint32_t EVIL[] = { 0, 1, 11, 12, 0x13, 0x7fffffffu, 0x80000000u, 0xfffffff0u, 0xffffffffu };
+    anlz_fake_beat_t beats[2] = { {1, 12000, 100}, {2, 12000, 600} };
+    anlz_fake_cue_t cues[2] = { { .hot_cue = 1, .time_ms = 1, .comment = "x" }, { .hot_cue = 2, .time_ms = 2 } };
+    uint8_t wave[8] = { 1, 2, 3, 4, 5, 6, 7, 8 };
+    unsigned long n = 0;
+
+    for (size_t e = 0; e < sizeof EVIL / sizeof EVIL[0]; e++) {
+        for (int which = 0; which < 6; which++) {
+            anlz_fake_t *b = anlz_fake_begin();
+            anlz_fake_add_ppth(b, "/Contents/a.mp3");
+            anlz_fake_add_pqtz(b, beats, 2, which == 0 ? EVIL[e] : 2);
+            anlz_fake_add_pqt2(b, beats[0], beats[1], which == 1 ? EVIL[e] : 2, (const uint16_t *)"\1\0\2\0", 2);
+            anlz_fake_add_pcob(b, 1, cues, 2, which == 2 ? EVIL[e] : 2);
+            anlz_fake_add_pco2(b, 1, cues, 2, which == 3 ? EVIL[e] : 2);
+            anlz_fake_add_wave(b, "PWV5", 2, which == 4 ? EVIL[e] : 4, wave, 8);
+            anlz_fake_add_wave(b, "PWAV", 1, which == 5 ? EVIL[e] : 8, wave, 8);
+            uint32_t len;
+            uint8_t *f = anlz_fake_finish(b, &len);
+            exercise_copy(f, len, 1);
+            /* also corrupt the first tag's len_tag and len_header with the evil value */
+            f[28 + 8] = (uint8_t)(EVIL[e] >> 24); f[28 + 9] = (uint8_t)(EVIL[e] >> 16);
+            f[28 + 10] = (uint8_t)(EVIL[e] >> 8); f[28 + 11] = (uint8_t)EVIL[e];
+            exercise_copy(f, len, 1);
+            free(f);
+            n++;
+        }
+    }
+    char msg[100];
+    snprintf(msg, sizeof msg, "%lu hostile length combinations", n);
+    snip_assert(msg, n == 54);
+}
+
+int main(int argc, char *argv[])
+{
+    (void)argc; (void)argv;
+    load_all();
+
+    test_intact_files();
+    test_hostile_lengths();
+    test_truncation();
+    test_mutation();
+
+    if (errors) {
+        fprintf(stdout, "[fail] %d error(s)\n", errors);
+        return 1;
+    }
+    fprintf(stdout, "[pass] anlz_robust_test (checksum %lu)\n", g_sink & 0xffff);
+    return 0;
+}

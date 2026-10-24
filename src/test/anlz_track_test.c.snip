@@ -1,0 +1,300 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <math.h>
+#include <stdint.h>
+#include <unistd.h>
+#include <sys/stat.h>
+
+#include "../nfs/utf16.h"
+#include "../anlz/anlz.h"
+#include "../anlz/anlz_fake.h"
+
+//SNIP_FILE SNIP_utf16      ../nfs/utf16.c
+//SNIP_FILE SNIP_anlz_core  ../anlz/anlz.c
+//SNIP_FILE SNIP_fake_anlz  ../anlz/anlz_fake.c
+
+#include "snip_core.h"
+
+#define FIX "fixtures/anlz/"
+
+static char g_root[256];
+
+static void make_root(void)
+{
+    snprintf(g_root, sizeof g_root, "/tmp/anlz_track_test_XXXXXX");
+    if (!mkdtemp(g_root)) { printf("[error] mkdtemp\n"); exit(1); }
+}
+
+static void remove_root(void)
+{
+    char cmd[300];
+    if (strncmp(g_root, "/tmp/anlz_track_test_", 21) != 0) return;      /* never rm anything else */
+    snprintf(cmd, sizeof cmd, "rm -rf '%s'", g_root);
+    if (system(cmd) != 0) printf("[warn] cleanup failed\n");
+}
+
+static void mkdirs(const char *path)
+{
+    char tmp[512];
+    snprintf(tmp, sizeof tmp, "%s", path);
+    for (char *p = tmp + 1; *p; p++)
+        if (*p == '/') { *p = 0; mkdir(tmp, 0755); *p = '/'; }
+    mkdir(tmp, 0755);
+}
+
+static int copy_file(const char *from, const char *to)
+{
+    FILE *in = fopen(from, "rb"), *out = fopen(to, "wb");
+    char buf[8192];
+    size_t n;
+    if (!in || !out) { if (in) fclose(in); if (out) fclose(out); return 0; }
+    while ((n = fread(buf, 1, sizeof buf, in)) > 0) fwrite(buf, 1, n, out);
+    fclose(in);
+    fclose(out);
+    return 1;
+}
+
+/* Install a fixture into root as /PIONEER/USBANLZ/<dir>/<id>/ANLZ0000.<ext>; ext_out is the extension to write. */
+static void install(const char *fixture, const char *dir_id, const char *ext_in, const char *ext_out)
+{
+    char dir[512], from[256], to[600];
+    snprintf(dir, sizeof dir, "%s/PIONEER/USBANLZ/%s", g_root, dir_id);
+    mkdirs(dir);
+    snprintf(from, sizeof from, FIX "%s_ANLZ0000.%s", fixture, ext_in);
+    snprintf(to, sizeof to, "%s/ANLZ0000.%s", dir, ext_out);
+    if (!copy_file(from, to)) { printf("[error] cannot install %s\n", from); errors++; }
+}
+
+/* --- path handling --- */
+
+static void test_resolve_path(void)
+{
+    char out[256];
+    snip_equals("resolve DAT", 0, anlz_resolve_path("/mnt/usb", "/PIONEER/USBANLZ/P02E/0002F1FC/ANLZ0000.DAT", ANLZ_FILE_DAT, out, sizeof out));
+    snip_assert("resolve DAT value", strcmp(out, "/mnt/usb/PIONEER/USBANLZ/P02E/0002F1FC/ANLZ0000.DAT") == 0);
+    anlz_resolve_path("/mnt/usb", "/PIONEER/USBANLZ/P02E/0002F1FC/ANLZ0000.DAT", ANLZ_FILE_EXT, out, sizeof out);
+    snip_assert("resolve EXT", strcmp(out, "/mnt/usb/PIONEER/USBANLZ/P02E/0002F1FC/ANLZ0000.EXT") == 0);
+    anlz_resolve_path("/mnt/usb", "/PIONEER/USBANLZ/P02E/0002F1FC/ANLZ0000.DAT", ANLZ_FILE_2EX, out, sizeof out);
+    snip_assert("resolve 2EX", strcmp(out, "/mnt/usb/PIONEER/USBANLZ/P02E/0002F1FC/ANLZ0000.2EX") == 0);
+    anlz_resolve_path("/mnt/usb///", "/PIONEER/x/ANLZ0000.dat", ANLZ_FILE_EXT, out, sizeof out);
+    snip_assert("resolve: trailing slashes on root, lowercase .dat", strcmp(out, "/mnt/usb/PIONEER/x/ANLZ0000.EXT") == 0);
+    anlz_resolve_path("", "/PIONEER/x/ANLZ0000.DAT", ANLZ_FILE_DAT, out, sizeof out);
+    snip_assert("resolve: empty root", strcmp(out, "/PIONEER/x/ANLZ0000.DAT") == 0);
+
+    /* untrusted input */
+    snip_equals("reject ..", -1, anlz_resolve_path("/r", "/PIONEER/../etc/passwd.DAT", ANLZ_FILE_DAT, out, sizeof out));
+    snip_equals("reject leading ..", -1, anlz_resolve_path("/r", "/../x/ANLZ0000.DAT", ANLZ_FILE_DAT, out, sizeof out));
+    snip_equals("reject trailing /..", -1, anlz_resolve_path("/r", "/x/..", ANLZ_FILE_DAT, out, sizeof out));
+    snip_equals("allow ..x names", 0, anlz_resolve_path("/r", "/x/..y/ANLZ0000.DAT", ANLZ_FILE_DAT, out, sizeof out));
+    snip_equals("reject relative", -1, anlz_resolve_path("/r", "PIONEER/x/ANLZ0000.DAT", ANLZ_FILE_DAT, out, sizeof out));
+    snip_equals("reject backslash", -1, anlz_resolve_path("/r", "/PIONEER\\x\\ANLZ0000.DAT", ANLZ_FILE_DAT, out, sizeof out));
+    snip_equals("reject non-DAT", -1, anlz_resolve_path("/r", "/PIONEER/x/ANLZ0000.EXT", ANLZ_FILE_DAT, out, sizeof out));
+    snip_equals("reject no extension", -1, anlz_resolve_path("/r", "/PIONEER/x/ANLZ0000", ANLZ_FILE_DAT, out, sizeof out));
+    snip_equals("reject empty", -1, anlz_resolve_path("/r", "", ANLZ_FILE_DAT, out, sizeof out));
+    snip_equals("reject NULL path", -1, anlz_resolve_path("/r", NULL, ANLZ_FILE_DAT, out, sizeof out));
+    snip_equals("reject NULL root", -1, anlz_resolve_path(NULL, "/x/A.DAT", ANLZ_FILE_DAT, out, sizeof out));
+    snip_equals("reject bad file kind", -1, anlz_resolve_path("/r", "/x/A.DAT", (anlz_file_t)5, out, sizeof out));
+    snip_equals("too long for the buffer", -1, anlz_resolve_path("/mnt/usb", "/PIONEER/USBANLZ/P02E/0002F1FC/ANLZ0000.DAT", ANLZ_FILE_DAT, out, 20));
+    snip_equals("exact fit", 0, anlz_resolve_path("/r", "/a/A.DAT", ANLZ_FILE_DAT, out, 11));
+    snip_equals("one byte too small", -1, anlz_resolve_path("/r", "/a/A.DAT", ANLZ_FILE_DAT, out, 10));
+    snip_equals("zero buffer", -1, anlz_resolve_path("/r", "/a/A.DAT", ANLZ_FILE_DAT, out, 0));
+
+    anlz_track_t *t = (anlz_track_t *)1;
+    snip_equals("open rejects ..", ANLZ_ERR_BAD_LEN, anlz_track_open(g_root, "/PIONEER/../etc/passwd.DAT", &t));
+    snip_assert("open rejects: out NULL", t == NULL);
+    snip_equals("open rejects relative", ANLZ_ERR_BAD_LEN, anlz_track_open(g_root, "PIONEER/x/ANLZ0000.DAT", &t));
+    snip_equals("open null out", ANLZ_ERR_BAD_LEN, anlz_track_open(g_root, "/a/A.DAT", NULL));
+    snip_equals("open: nothing on disk", ANLZ_ERR_IO, anlz_track_open(g_root, "/PIONEER/USBANLZ/PFFF/00000000/ANLZ0000.DAT", &t));
+    anlz_track_close(NULL);
+}
+
+/* --- whole tracks --- */
+
+static int expected_bpm(const char *dir_id)
+{
+    FILE *f = fopen(FIX "expected.tsv", "r");
+    char line[1024];
+    int bpm = -1;
+    if (!f) return -1;
+    while (fgets(line, sizeof line, f)) {
+        if (line[0] == '#' || !strstr(line, dir_id)) continue;
+        char *t = strchr(line, '\t');
+        if (t) t = strchr(t + 1, '\t');
+        if (t) bpm = atoi(t + 1);
+        break;
+    }
+    fclose(f);
+    return bpm;
+}
+
+static void test_full_track(void)
+{
+    install("P042_00015D16", "P042/00015D16", "DAT", "DAT");
+    install("P042_00015D16", "P042/00015D16", "EXT", "EXT");
+    anlz_track_t *t;
+    snip_equals("full: open", ANLZ_OK, anlz_track_open(g_root, "/PIONEER/USBANLZ/P042/00015D16/ANLZ0000.DAT", &t));
+    snip_assert("full: DAT and EXT, no 2EX", anlz_track_file(t, ANLZ_FILE_DAT) && anlz_track_file(t, ANLZ_FILE_EXT) && !anlz_track_file(t, ANLZ_FILE_2EX));
+
+    const char *p;
+    snip_assert("full: path", anlz_track_path(t, &p) == ANLZ_OK && strcmp(p, "/Contents/Sex Sells/BABY IT'S ME/Baby_It_s_Me.mp3") == 0);
+
+    anlz_beatgrid_t g;
+    anlz_beat_t b;
+    snip_equals("full: grid", ANLZ_OK, anlz_track_beatgrid(t, &g));
+    snip_assert("full: grid is PQTZ with microseconds", g.source == ANLZ_GRID_PQTZ && g.count == 716 && g.has_sub_ms);
+    snip_assert("full: beat 0", anlz_beat_at(&g, 0, &b) && b.time_ms == 51 && b.sub_ms_us == 972 && b.bpm_x100 == 12300);
+
+    anlz_cue_list_t l;
+    snip_equals("full: cues", ANLZ_OK, anlz_track_cues(t, ANLZ_CUES_ALL, &l));
+    snip_assert("full: one loop from PCO2", l.count == 1 && l.cues[0].is_loop && l.cues[0].from_pco2 && l.cues[0].time_ms == 31271
+                && l.cues[0].loop_time_ms == 39076 && l.cues[0].loop_num == 16);
+    anlz_cue_list_free(&l);
+
+    anlz_waveform_t w;
+    snip_assert("full: PWAV from DAT", anlz_track_waveform(t, ANLZ_WAVE_PREVIEW, &w) == ANLZ_OK && w.count == 400);
+    snip_assert("full: PWV5 from EXT", anlz_track_waveform(t, ANLZ_WAVE_COLOR_DETAIL, &w) == ANLZ_OK && w.count == 52397);
+    snip_assert("full: PWV4 from EXT", anlz_track_waveform(t, ANLZ_WAVE_COLOR_PREVIEW, &w) == ANLZ_OK && w.count == 1200);
+    snip_equals("full: no 3-band data", ANLZ_ERR_ABSENT, anlz_track_waveform(t, ANLZ_WAVE_3BAND_DETAIL, &w));
+    snip_equals("full: bad kind", ANLZ_ERR_BAD_LEN, anlz_track_waveform(t, (anlz_wave_kind_t)42, &w));
+    anlz_track_close(t);
+}
+
+static void test_dat_only_and_ext_only(void)
+{
+    /* P07D: 4 hot cues; the .DAT only lists the first 3 */
+    install("P07D_0001A2E9", "P07D/0001A2E9", "DAT", "DAT");
+    anlz_track_t *t;
+    anlz_cue_list_t l;
+    anlz_beatgrid_t g;
+    anlz_waveform_t w;
+    snip_equals("dat only: open", ANLZ_OK, anlz_track_open(g_root, "/PIONEER/USBANLZ/P07D/0001A2E9/ANLZ0000.DAT", &t));
+    snip_assert("dat only: files", anlz_track_file(t, ANLZ_FILE_DAT) && !anlz_track_file(t, ANLZ_FILE_EXT));
+    snip_assert("dat only: grid, no microseconds", anlz_track_beatgrid(t, &g) == ANLZ_OK && g.count == 859 && !g.has_sub_ms);
+    snip_assert("dat only: 3 cues from PCOB", anlz_track_cues(t, ANLZ_CUES_HOT, &l) == ANLZ_OK && l.count == 3 && !l.cues[0].from_pco2);
+    anlz_cue_list_free(&l);
+    snip_assert("dat only: PWAV", anlz_track_waveform(t, ANLZ_WAVE_PREVIEW, &w) == ANLZ_OK);
+    snip_equals("dat only: no detail waveform", ANLZ_ERR_ABSENT, anlz_track_waveform(t, ANLZ_WAVE_COLOR_DETAIL, &w));
+    anlz_track_close(t);
+
+    /* now the .EXT arrives with a lowercase extension: all 4 cues from PCO2, microseconds attached */
+    install("P07D_0001A2E9", "P07D/0001A2E9", "EXT", "ext");
+    snip_equals("lowercase ext: open", ANLZ_OK, anlz_track_open(g_root, "/PIONEER/USBANLZ/P07D/0001A2E9/ANLZ0000.DAT", &t));
+    snip_assert("lowercase ext: found", anlz_track_file(t, ANLZ_FILE_EXT) != NULL);
+    snip_assert("lowercase ext: 4 cues", anlz_track_cues(t, ANLZ_CUES_HOT, &l) == ANLZ_OK && l.count == 4 && l.cues[3].hot_cue == 4 && l.cues[0].from_pco2);
+    anlz_cue_list_free(&l);
+    snip_assert("lowercase ext: microseconds", anlz_track_beatgrid(t, &g) == ANLZ_OK && g.has_sub_ms);
+    anlz_track_close(t);
+
+    /* a lowercase .dat path in the database still works */
+    snip_equals("lowercase .dat in analyze_path", ANLZ_OK, anlz_track_open(g_root, "/PIONEER/USBANLZ/P07D/0001A2E9/ANLZ0000.dat", &t));
+    anlz_track_close(t);
+
+    /* EXT only (the .DAT is missing): grid from PQT2 alone, cues from PCO2 */
+    install("P024_00023562", "P024/00023562", "EXT", "EXT");
+    snip_equals("ext only: open", ANLZ_OK, anlz_track_open(g_root, "/PIONEER/USBANLZ/P024/00023562/ANLZ0000.DAT", &t));
+    snip_assert("ext only: files", !anlz_track_file(t, ANLZ_FILE_DAT) && anlz_track_file(t, ANLZ_FILE_EXT));
+    snip_assert("ext only: grid from PQT2", anlz_track_beatgrid(t, &g) == ANLZ_OK && g.source == ANLZ_GRID_PQT2 && g.count == 677);
+    snip_assert("ext only: 3 cues", anlz_track_cues(t, ANLZ_CUES_HOT, &l) == ANLZ_OK && l.count == 3);
+    anlz_cue_list_free(&l);
+    snip_assert("ext only: no PWAV (it lives in the .DAT)", anlz_track_waveform(t, ANLZ_WAVE_PREVIEW, &w) == ANLZ_ERR_ABSENT);
+    anlz_track_close(t);
+}
+
+static void test_unreadable_files(void)
+{
+    /* EXT is garbage: treated as absent, not an error; the DAT still works */
+    install("P014_00001A7A", "P014/00001A7A", "DAT", "DAT");
+    char dir[512], path[600];
+    snprintf(dir, sizeof dir, "%s/PIONEER/USBANLZ/P014/00001A7A", g_root);
+    snprintf(path, sizeof path, "%s/ANLZ0000.EXT", dir);
+    FILE *f = fopen(path, "wb");
+    fputs("this is not an analysis file, just text that is long enough to pass the size check....", f);
+    fclose(f);
+    anlz_track_t *t;
+    anlz_beatgrid_t g;
+    snip_equals("garbage ext: open", ANLZ_OK, anlz_track_open(g_root, "/PIONEER/USBANLZ/P014/00001A7A/ANLZ0000.DAT", &t));
+    snip_assert("garbage ext: absent", anlz_track_file(t, ANLZ_FILE_DAT) && !anlz_track_file(t, ANLZ_FILE_EXT));
+    snip_assert("garbage ext: grid", anlz_track_beatgrid(t, &g) == ANLZ_OK && g.count == 390);
+    anlz_track_close(t);
+
+    /* everything garbage: the open fails with the parse error, not a crash */
+    snprintf(path, sizeof path, "%s/ANLZ0000.DAT", dir);
+    f = fopen(path, "wb");
+    fputs("PMNG garbage garbage garbage garbage garbage garbage", f);
+    fclose(f);
+    snip_equals("all garbage: open fails", ANLZ_ERR_MAGIC, anlz_track_open(g_root, "/PIONEER/USBANLZ/P014/00001A7A/ANLZ0000.DAT", &t));
+    snip_assert("all garbage: out NULL", t == NULL);
+
+    /* a track with no usable data at all: accessors say ABSENT */
+    anlz_fake_t *b = anlz_fake_begin();
+    uint32_t len;
+    uint8_t *buf = anlz_fake_finish(b, &len);
+    snprintf(dir, sizeof dir, "%s/PIONEER/USBANLZ/PEMP/00000001", g_root);
+    mkdirs(dir);
+    snprintf(path, sizeof path, "%s/ANLZ0000.DAT", dir);
+    f = fopen(path, "wb");
+    fwrite(buf, 1, len, f);
+    fclose(f);
+    free(buf);
+    anlz_cue_list_t l;
+    snip_equals("empty file: open", ANLZ_OK, anlz_track_open(g_root, "/PIONEER/USBANLZ/PEMP/00000001/ANLZ0000.DAT", &t));
+    const char *p;
+    snip_equals("empty file: path", ANLZ_ERR_ABSENT, anlz_track_path(t, &p));
+    snip_equals("empty file: grid", ANLZ_ERR_ABSENT, anlz_track_beatgrid(t, &g));
+    snip_equals("empty file: cues", ANLZ_ERR_ABSENT, anlz_track_cues(t, ANLZ_CUES_ALL, &l));
+    snip_assert("empty file: cue list cleared", l.count == 0 && l.cues == NULL);
+    anlz_track_close(t);
+}
+
+static void test_database_cross_check(void)
+{
+    /* every fixture through the track API: first tempo equals the database's bpm (0 = unanalysed = no beats) */
+    static const char *ID[] = { "P014/00001A7A", "P024/00023562", "P02A/0000ECBE", "P035/0002765B",
+                                "P042/00015D16", "P04B/000145BD", "P07D/0001A2E9",
+                                "P004/00028148", "P00C/0000D1E2", "P022/0002380C" };
+    static const char *FX[] = { "P014_00001A7A", "P024_00023562", "P02A_0000ECBE", "P035_0002765B",
+                                "P042_00015D16", "P04B_000145BD", "P07D_0001A2E9",
+                                "P004_00028148", "P00C_0000D1E2", "P022_0002380C" };
+    for (int i = 0; i < 10; i++) {
+        char ap[200], msg[200];
+        install(FX[i], ID[i], "DAT", "DAT");
+        install(FX[i], ID[i], "EXT", "EXT");
+        snprintf(ap, sizeof ap, "/PIONEER/USBANLZ/%s/ANLZ0000.DAT", ID[i]);
+        anlz_track_t *t;
+        anlz_beatgrid_t g;
+        anlz_beat_t b;
+        snprintf(msg, sizeof msg, "%s open", ID[i]);
+        if (!snip_equals(msg, ANLZ_OK, anlz_track_open(g_root, ap, &t))) continue;
+        snprintf(msg, sizeof msg, "%s grid", ID[i]);
+        snip_equals(msg, ANLZ_OK, anlz_track_beatgrid(t, &g));
+        int bpm = expected_bpm(ID[i]);
+        snprintf(msg, sizeof msg, "%s first tempo == database bpm %d", ID[i], bpm);
+        if (bpm == 0) snip_assert(msg, g.count == 0);
+        else snip_assert(msg, g.count > 0 && anlz_beat_at(&g, 0, &b) && b.bpm_x100 == bpm);
+        const char *p;
+        snprintf(msg, sizeof msg, "%s path starts with /Contents/", ID[i]);
+        snip_assert(msg, anlz_track_path(t, &p) == ANLZ_OK && strncmp(p, "/Contents/", 10) == 0);
+        anlz_track_close(t);
+    }
+}
+
+int main(int argc, char *argv[])
+{
+    (void)argc; (void)argv;
+    make_root();
+
+    test_resolve_path();
+    test_full_track();
+    test_dat_only_and_ext_only();
+    test_unreadable_files();
+    test_database_cross_check();
+
+    remove_root();
+    if (errors) {
+        fprintf(stdout, "[fail] %d error(s)\n", errors);
+        return 1;
+    }
+    fprintf(stdout, "[pass] anlz_track_test\n");
+    return 0;
+}

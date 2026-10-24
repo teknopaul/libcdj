@@ -53,7 +53,7 @@ static char *devicesql_to_utf8(const uint8_t *ptr, uint32_t avail)
         /* UTF-16LE → UTF-8: worst case 3× expansion */
         char *s = malloc((size_t)blen * 3 + 1);
         if (!s) return NULL;
-        if (utf16le_to_utf8(ptr + 4, (uint32_t)blen, s, (uint32_t)(blen * 3 + 1)) < 0) {
+        if (utf16le_decode(ptr + 4, (uint32_t)blen, s, (uint32_t)(blen * 3 + 1)) < 0) {
             free(s);
             return NULL;
         }
@@ -88,8 +88,8 @@ static char *devicesql_to_utf8(const uint8_t *ptr, uint32_t avail)
 #define TR_N_STRINGS   21
 #define TR_ROW_MIN     (TR_FIXED + TR_N_STRINGS * 2)   /* 136 bytes */
 
-static int parse_track_row(const uint8_t *row_base, uint32_t row_avail,
-                            pdb_track_cb cb, void *ud)
+static int parse_track_row_cb(const uint8_t *row_base, uint32_t row_avail,
+                              pdb_track_cb cb, void *ud)
 {
     if (row_avail < TR_ROW_MIN) return 0;
 
@@ -143,13 +143,15 @@ static int parse_track_row(const uint8_t *row_base, uint32_t row_avail,
     return rc;
 }
 
+/* Internal per-row callback: row points at the row start, avail = bytes to end of page. */
+typedef int (*row_fn)(const uint8_t *row, uint32_t avail, void *ctx);
+
 /*
  * Parse all present rows from a single data page.
  * Heap starts at offset 40 within the page.
  * Row index is built backwards from the end of the page in groups of 16.
  */
-static int parse_tracks_page(const uint8_t *page, uint32_t len_page,
-                              pdb_track_cb cb, void *ud)
+static int parse_page_rows(const uint8_t *page, uint32_t len_page, row_fn fn, void *ctx)
 {
     const uint32_t heap_off = 40;
 
@@ -174,9 +176,7 @@ static int parse_tracks_page(const uint8_t *page, uint32_t len_page,
             uint16_t ofs = ru16(page + base - 6 - i * 2);
             uint32_t row_start = heap_off + (uint32_t)ofs;
             if (row_start >= len_page) continue;
-            int rc = parse_track_row(page + row_start,
-                                     len_page - row_start,
-                                     cb, ud);
+            int rc = fn(page + row_start, len_page - row_start, ctx);
             if (rc != 0) return rc;
         }
     }
@@ -188,29 +188,32 @@ static int parse_tracks_page(const uint8_t *page, uint32_t len_page,
  *
  * The first page of any chain has page_flags 0x40 set (non-data page) and
  * contains no rows. Subsequent data pages have 0x40 clear.
- * Iteration stops when next_page is out of range or type changes.
+ * Iteration stops after last_page, when next_page is out of range or the type changes.
  */
 static int walk_table(const uint8_t *data, uint32_t file_len, uint32_t len_page,
-                      uint32_t first_page, pdb_track_cb cb, void *ud)
+                      uint32_t first_page, uint32_t last_page, uint32_t type,
+                      row_fn fn, void *ctx)
 {
     uint32_t max_pages = file_len / len_page;
     uint32_t page_index = first_page;
     uint32_t iterations = 0;
 
     while ((uint64_t)page_index * len_page + 40 <= (uint64_t)file_len
+           && (uint64_t)(page_index + 1) * len_page <= (uint64_t)file_len
            && iterations++ < max_pages)
     {
-        const uint8_t *page = data + page_index * len_page;
+        const uint8_t *page = data + (size_t)page_index * len_page;
 
         uint32_t pg_type = ru32(page + 8);
-        if (pg_type != (uint32_t)PDB_PAGE_TRACKS) break;
+        if (pg_type != type) break;
 
         /* 0x40 set = non-data page (first/empty); 0x40 clear = data page */
         if (!(page[27] & 0x40)) {
-            int rc = parse_tracks_page(page, len_page, cb, ud);
+            int rc = parse_page_rows(page, len_page, fn, ctx);
             if (rc != 0) return rc;
         }
 
+        if (page_index == last_page) break;
         uint32_t next = ru32(page + 12);
         if (next == page_index) break;   /* self-loop sentinel */
         page_index = next;
@@ -218,9 +221,10 @@ static int walk_table(const uint8_t *data, uint32_t file_len, uint32_t len_page,
     return 0;
 }
 
-int pdb_parse(const uint8_t *data, uint32_t len, pdb_track_cb cb, void *ud)
+int pdb_foreach_row(const uint8_t *data, uint32_t len, uint32_t table_type,
+                    pdb_row_cb cb, void *ud)
 {
-    if (!data || len < 32) return -1;
+    if (!data || len < 32 || !cb) return -1;
 
     uint32_t len_page   = ru32(data + 4);
     uint32_t num_tables = ru32(data + 8);
@@ -229,16 +233,168 @@ int pdb_parse(const uint8_t *data, uint32_t len, pdb_track_cb cb, void *ud)
 
     for (uint32_t i = 0; i < num_tables; i++) {
         const uint8_t *tbl = data + 28 + i * 16;
-        uint32_t type       = ru32(tbl + 0);
-        uint32_t first_page = ru32(tbl + 8);
-        if (type == (uint32_t)PDB_PAGE_TRACKS) {
-            return walk_table(data, len, len_page, first_page, cb, ud);
-        }
+        if (ru32(tbl + 0) != table_type) continue;
+        return walk_table(data, len, len_page, ru32(tbl + 8), ru32(tbl + 12),
+                          table_type, (row_fn)cb, ud);
     }
-    return 0;   /* no tracks table — not an error */
+    return 0;   /* table absent — not an error */
 }
 
+/* ---- typed tables ---- */
+
+typedef struct { pdb_track_cb cb; void *ud; } track_ctx_t;
+
+static int track_row(const uint8_t *row, uint32_t avail, void *ctx)
+{
+    track_ctx_t *c = ctx;
+    return parse_track_row_cb(row, avail, c->cb, c->ud);
+}
+
+int pdb_parse(const uint8_t *data, uint32_t len, pdb_track_cb cb, void *ud)
+{
+    track_ctx_t c = { cb, ud };
+    return pdb_foreach_row(data, len, PDB_PAGE_TRACKS, track_row, &c);
+}
+
+/* Bounds-checked string at row + ofs; NULL when out of range. */
+static char *row_string(const uint8_t *row, uint32_t avail, uint32_t ofs)
+{
+    if (ofs >= avail) return NULL;
+    return devicesql_to_utf8(row + ofs, avail - ofs);
+}
+
+typedef struct { void *cb; void *ud; } named_ctx_t;
+
+/* genres(1), labels(4): id u32, name @4 */
+static int genre_row(const uint8_t *row, uint32_t avail, void *ctx)
+{
+    named_ctx_t *c = ctx;
+    if (avail < 6) return 0;
+    pdb_named_t n = { ru32(row), NULL };
+    n.name = row_string(row, avail, 4);
+    int rc = ((pdb_named_cb)c->cb)(&n, c->ud);
+    free(n.name);
+    return rc;
+}
+
+/* keys(5): id u32, id2 u32, name @8 */
+static int key_row(const uint8_t *row, uint32_t avail, void *ctx)
+{
+    named_ctx_t *c = ctx;
+    if (avail < 10) return 0;
+    pdb_named_t n = { ru32(row), NULL };
+    n.name = row_string(row, avail, 8);
+    int rc = ((pdb_named_cb)c->cb)(&n, c->ud);
+    free(n.name);
+    return rc;
+}
+
+/* colors(6): u32 + u8 unknown, id u16 @5, u8 unknown, name @8 */
+static int color_row(const uint8_t *row, uint32_t avail, void *ctx)
+{
+    named_ctx_t *c = ctx;
+    if (avail < 10) return 0;
+    pdb_named_t n = { ru16(row + 5), NULL };
+    n.name = row_string(row, avail, 8);
+    int rc = ((pdb_named_cb)c->cb)(&n, c->ud);
+    free(n.name);
+    return rc;
+}
+
+/* artists(2): subtype u16, index_shift u16, id u32, 0x03, ofs_near u8 @9, ofs_far u16 @10 */
+static int artist_row(const uint8_t *row, uint32_t avail, void *ctx)
+{
+    named_ctx_t *c = ctx;
+    if (avail < 10) return 0;
+    uint16_t subtype = ru16(row);
+    uint32_t ofs = (subtype & 0x04) && avail >= 12 ? ru16(row + 10) : row[9];
+    pdb_named_t n = { ru32(row + 4), NULL };
+    n.name = row_string(row, avail, ofs);
+    int rc = ((pdb_named_cb)c->cb)(&n, c->ud);
+    free(n.name);
+    return rc;
+}
+
+/* albums(3): magic u16, index_shift u16, u32, artist_id @8, id @12, u32, 0x03, ofs_name u8 @21 */
+static int album_row(const uint8_t *row, uint32_t avail, void *ctx)
+{
+    named_ctx_t *c = ctx;
+    if (avail < 22) return 0;
+    pdb_album_t a = { ru32(row + 12), ru32(row + 8), NULL };
+    a.name = row_string(row, avail, row[21]);
+    int rc = ((pdb_album_cb)c->cb)(&a, c->ud);
+    free(a.name);
+    return rc;
+}
+
+/* playlist tree(7): parent_id, u32, sort_order, id, is_folder (all u32), name @20 */
+static int playlist_row(const uint8_t *row, uint32_t avail, void *ctx)
+{
+    named_ctx_t *c = ctx;
+    if (avail < 21) return 0;
+    pdb_playlist_t p = { ru32(row + 12), ru32(row), ru32(row + 8), ru32(row + 16) != 0, NULL };
+    p.name = row_string(row, avail, 20);
+    int rc = ((pdb_playlist_cb)c->cb)(&p, c->ud);
+    free(p.name);
+    return rc;
+}
+
+/* playlist entries(8): entry_index, track_id, playlist_id (u32) */
+static int playlist_entry_row(const uint8_t *row, uint32_t avail, void *ctx)
+{
+    named_ctx_t *c = ctx;
+    if (avail < 12) return 0;
+    pdb_playlist_entry_t e = { ru32(row), ru32(row + 4), ru32(row + 8) };
+    return ((pdb_playlist_entry_cb)c->cb)(&e, c->ud);
+}
+
+/* artwork(13): id u32, path @4 */
+static int artwork_row(const uint8_t *row, uint32_t avail, void *ctx)
+{
+    return genre_row(row, avail, ctx);
+}
+
+#define PDB_TYPED(fname, cbtype, table, rowfn) \
+int fname(const uint8_t *data, uint32_t len, cbtype cb, void *ud) \
+{ \
+    named_ctx_t c = { (void *)cb, ud }; \
+    return pdb_foreach_row(data, len, table, (pdb_row_cb)rowfn, &c); \
+}
+
+PDB_TYPED(pdb_parse_genres,   pdb_named_cb,          PDB_PAGE_GENRES,           genre_row)
+PDB_TYPED(pdb_parse_artists,  pdb_named_cb,          PDB_PAGE_ARTISTS,          artist_row)
+PDB_TYPED(pdb_parse_albums,   pdb_album_cb,          PDB_PAGE_ALBUMS,           album_row)
+PDB_TYPED(pdb_parse_labels,   pdb_named_cb,          PDB_PAGE_LABELS,           genre_row)
+PDB_TYPED(pdb_parse_keys,     pdb_named_cb,          PDB_PAGE_KEYS,             key_row)
+PDB_TYPED(pdb_parse_colors,   pdb_named_cb,          PDB_PAGE_COLORS,           color_row)
+PDB_TYPED(pdb_parse_playlists,pdb_playlist_cb,       PDB_PAGE_PLAYLIST_TREE,    playlist_row)
+PDB_TYPED(pdb_parse_playlist_entries, pdb_playlist_entry_cb, PDB_PAGE_PLAYLIST_ENTRIES, playlist_entry_row)
+PDB_TYPED(pdb_parse_artwork,  pdb_named_cb,          PDB_PAGE_ARTWORK,          artwork_row)
+
 //SNIP_pdb
+
+uint8_t *pdb_read_file(const char *path, uint32_t *len_out)
+{
+    FILE *f = fopen(path, "rb");
+    if (!f) return NULL;
+
+    fseek(f, 0, SEEK_END);
+    long sz = ftell(f);
+    rewind(f);
+    if (sz <= 0) { fclose(f); return NULL; }
+
+    uint8_t *buf = malloc((size_t)sz);
+    if (!buf) { fclose(f); return NULL; }
+
+    if ((long)fread(buf, 1, (size_t)sz, f) != sz) {
+        free(buf);
+        fclose(f);
+        return NULL;
+    }
+    fclose(f);
+    if (len_out) *len_out = (uint32_t)sz;
+    return buf;
+}
 
 int pdb_parse_file(const char *path, pdb_track_cb cb, void *ud)
 {

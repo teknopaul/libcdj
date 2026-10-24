@@ -5,7 +5,10 @@
  * The FDs timeout at 120 seconds for no real reason.
  * An interval is set to fire SIGARARM every 200ms for CDJ status and keepalive fires every 8th alarm (1600ms)
  * The signal is converted to a write() on a self pipe which exits pselect()
- *
+ * 
+ * N.B. this mechanism does not fully work because is starts all threads simultaneously instead of waiting for discovery to finish
+ * TODO sort our the ordering of the initial ssetup
+ * 
  * @author teknopaul
  */
 #include <stdio.h>

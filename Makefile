@@ -26,7 +26,7 @@ VDJ_DEP = src/c/vdj.c src/c/vdj.h
 
 OBJS = target/cdj.o target/vdj_store.o target/vdj_net.o target/vdj_beatout.o target/vdj_master.o \
        target/vdj_discovery.o target/vdj_pselect.o target/vdj_simple.o \
-       target/vdj.o
+       target/vdj.o target/nfs/utf16.o target/nfs/pdb.o target/anlz/anlz.o
 
 NFS_OBJS = target/nfs/xdr.o target/nfs/rpc.o target/nfs/utf16.o \
            target/nfs/portmap_client.o target/nfs/mount_client.o \
@@ -40,6 +40,12 @@ target:
 
 target/nfs:
 	mkdir -p target/nfs
+
+target/anlz:
+	mkdir -p target/anlz
+
+target/anlz/anlz.o: src/anlz/anlz.c src/anlz/anlz.h src/nfs/utf16.h | target/anlz
+	$(CC) $(CFLAGS) -Isrc/anlz -Isrc/nfs -c src/anlz/anlz.c -o $@
 
 target/bin:
 	mkdir -p target/bin
@@ -108,10 +114,22 @@ target/bin/xdj_pdb.o: src/bin/xdj_pdb.c src/nfs/pdb.h | target/bin
 target/xdj-pdb: $(NFS_OBJS) target/nfs/pdb.o target/bin/xdj_pdb.o
 	$(CC) $(CFLAGS) -o $@ $^
 
+target/bin/xdj_anlz.o: src/bin/xdj_anlz.c | target/bin
+	$(CC) $(CFLAGS) -c src/bin/xdj_anlz.c -o $@
+
+target/xdj-anlz: target/bin/xdj_anlz.o
+	$(CC) $(CFLAGS) -o $@ $^
+
+target/bin/xdj_track.o: src/bin/xdj_track.c src/anlz/anlz.h src/nfs/pdb.h | target/bin
+	$(CC) $(CFLAGS) -Isrc/anlz -Isrc/nfs -c src/bin/xdj_track.c -o $@
+
+target/xdj-track: target/anlz/anlz.o target/nfs/utf16.o target/nfs/pdb.o target/bin/xdj_track.o
+	$(CC) $(CFLAGS) -o $@ $^ -lm
+
 target/nfs-server-test: $(NFS_SERVER_OBJS) target/bin/nfs_server_test.o
 	$(CC) $(CFLAGS) -o $@ $^
 
-VDJ_NFS_OBJS = $(OBJS) $(NFS_SERVER_OBJS) target/nfs/vdj_nfs.o
+VDJ_NFS_OBJS = $(sort $(OBJS) $(NFS_SERVER_OBJS)) target/nfs/vdj_nfs.o
 
 target/vdj-nfs: $(VDJ_NFS_OBJS) target/bin/vdj_nfs_main.o
 	$(CC) $(CFLAGS) -o $@ $^ -lpthread
@@ -200,13 +218,13 @@ target/cdj_mon.o: src/c/cdj_mon.c src/c/cdj_mon_tui.c
 target/cdj.o: $(LIBCDJ_DEP)
 	$(CC) $(CFLAGS) $(LIBCDJ_SRC) -c -o $@
 
-target/libcdj.so: $(LIBCDJ_DEP) $(OBJS)
+target/libcdj.so: $(LIBCDJ_DEP) $(OBJS) | target/nfs target/anlz
 	$(CC) $(CFLAGS) -shared -rdynamic -o $@ $(OBJS)
 
 target/libvdj.so: $(OBJS) $(LIBVDJ_DEP)
 	$(CC) $(CFLAGS) -shared -rdynamic -o $@ $(LIBVDJ_SRC)
 
-.PHONY: clean install uninstall deb test check
+.PHONY: clean install uninstall deb test test-asan check survey survey-tracks check-fixtures
 
 rpc:
 	cd src/x; rpcgen -Sc mount.x
@@ -231,9 +249,34 @@ rpc-readdir:
 	cd src/x; $(CC) -fPIC -DPIC -Wall -o read-dir xdr.o mount_clnt.o nfs_clnt.o vdj_nfs_explore.o
 	src/x/read-dir 169.254.177.253
 
+# Optional developer target: tag survey of a full rekordbox export (not needed by make test).
+ANLZ_TEST_DIR ?= /var/tmp/rekordbox-example/PIONEER
+survey: target/xdj-anlz
+	@test -d "$(ANLZ_TEST_DIR)" || { echo "$(ANLZ_TEST_DIR) not found (set ANLZ_TEST_DIR)"; exit 1; }
+	target/xdj-anlz --survey "$(ANLZ_TEST_DIR)"
+
+# Optional developer target: cross-check every track of a full export against its analysis files.
+survey-tracks: target/xdj-track
+	@test -d "$(ANLZ_TEST_DIR)" || { echo "$(ANLZ_TEST_DIR) not found (set ANLZ_TEST_DIR)"; exit 1; }
+	target/xdj-track --check "$(dir $(patsubst %/,%,$(ANLZ_TEST_DIR)))"
+
+# The ANLZ tests again, compiled with AddressSanitizer and UBSan (any report fails the build).
+ANLZ_TESTS = anlz_container_test anlz_beatgrid_test anlz_cues_test anlz_waveform_test anlz_track_test anlz_robust_test
+test-asan: check-fixtures
+	@for t in $(ANLZ_TESTS); do \
+	  ( cd src/test && \
+	    awk '/^.*$$/ {print $$0} /^\/\/SNIP_FILE.*/ {system("snipcat " $$2 " " $$3)}' $$t.c.snip > $$t.c && \
+	    gcc -Wall -Werror -Wno-unused-function -g -O1 -fsanitize=address,undefined -fno-sanitize-recover=all $$t.c -o $$t -lm && \
+	    ./$$t; rc=$$?; rm -f $$t $$t.c; exit $$rc ) || exit 1; \
+	done
+
+# ANLZ fixtures must stay byte-for-byte copies of the real files.
+check-fixtures:
+	cd src/test/fixtures/anlz && sha256sum --quiet -c SHA256SUMS
+
 check: test
 
-test:
+test: check-fixtures
 	mkdir -p target/
 	$(CC) -Wall -Wno-unused-variable -Isrc/c -c src/test/test_libcdj.c -o target/test_libcdj.o
 	$(CC) -Wall -Isrc/c -o target/libcdj_test target/test_libcdj.o target/cdj.o
@@ -242,6 +285,12 @@ test:
 	sniprun src/test/bpm_madness_test.c.snip
 	sniprun src/test/time_diff_test.c.snip
 	sniprun src/test/pdb_parse_test.c.snip
+	sniprun src/test/anlz_container_test.c.snip
+	sniprun src/test/anlz_beatgrid_test.c.snip
+	sniprun src/test/anlz_cues_test.c.snip
+	sniprun src/test/anlz_waveform_test.c.snip
+	sniprun src/test/anlz_track_test.c.snip
+	sniprun src/test/anlz_robust_test.c.snip
 
 clean:
 	rm -rf target/
@@ -254,6 +303,7 @@ install:
 	cd $(LIBDIR); test -h libvdj.so || ln -s libvdj.so.1.0 libvdj.so
 	mkdir -p /usr/include/cdj
 	cp -f src/c/*.h  /usr/include/cdj
+	cp -f src/nfs/pdb.h src/anlz/anlz.h /usr/include/cdj
 	cp -f target/vdj-mon /usr/bin
 	cp -f target/cdj-mon /usr/bin
 	cp -f target/cdj-scan /usr/bin

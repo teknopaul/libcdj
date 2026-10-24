@@ -3,6 +3,10 @@
 
 #include <stdint.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /* Page type constants (table header type field). */
 #define PDB_PAGE_TRACKS             0
 #define PDB_PAGE_GENRES             1
@@ -74,5 +78,74 @@ int pdb_parse(const uint8_t *data, uint32_t len,
  * Returns 0 on success, -1 on I/O or parse error.
  */
 int pdb_parse_file(const char *path, pdb_track_cb cb, void *userdata);
+
+/*
+ * Load a whole file into memory for the pdb_parse_* functions.
+ * Caller free()s the result. Returns NULL on I/O error.
+ */
+uint8_t *pdb_read_file(const char *path, uint32_t *len_out);
+
+/*
+ * Generic access: call cb for every present row of the given table type
+ * (PDB_PAGE_*). row points at the start of the row, avail is the number of
+ * bytes from there to the end of its page. Return non-zero from cb to stop.
+ * A table that is absent from the file is not an error.
+ */
+typedef int (*pdb_row_cb)(const uint8_t *row, uint32_t avail, void *userdata);
+int pdb_foreach_row(const uint8_t *data, uint32_t len, uint32_t table_type,
+                    pdb_row_cb cb, void *userdata);
+
+/*
+ * Typed table readers. Strings in the structs are valid only during the callback.
+ * All return 0 on success, -1 on fatal parse error (or the non-zero value a callback returned).
+ */
+
+/* genres, artists, labels, keys, colors, artwork (name = path for artwork).
+ * id is the table row id (for colors, the color id used by tracks). */
+typedef struct pdb_named {
+    uint32_t id;
+    char    *name;
+} pdb_named_t;
+typedef int (*pdb_named_cb)(const pdb_named_t *row, void *userdata);
+
+typedef struct pdb_album {
+    uint32_t id;
+    uint32_t artist_id;
+    char    *name;
+} pdb_album_t;
+typedef int (*pdb_album_cb)(const pdb_album_t *row, void *userdata);
+
+/* A node of the playlist tree: a folder (is_folder) or a playlist. parent_id 0 = root. */
+typedef struct pdb_playlist {
+    uint32_t id;
+    uint32_t parent_id;
+    uint32_t sort_order;
+    int      is_folder;
+    char    *name;
+} pdb_playlist_t;
+typedef int (*pdb_playlist_cb)(const pdb_playlist_t *row, void *userdata);
+
+/* One track in a playlist; order by entry_index. */
+typedef struct pdb_playlist_entry {
+    uint32_t entry_index;
+    uint32_t track_id;
+    uint32_t playlist_id;
+} pdb_playlist_entry_t;
+typedef int (*pdb_playlist_entry_cb)(const pdb_playlist_entry_t *row, void *userdata);
+
+int pdb_parse_genres  (const uint8_t *data, uint32_t len, pdb_named_cb cb, void *userdata);
+int pdb_parse_artists (const uint8_t *data, uint32_t len, pdb_named_cb cb, void *userdata);
+int pdb_parse_albums  (const uint8_t *data, uint32_t len, pdb_album_cb cb, void *userdata);
+int pdb_parse_labels  (const uint8_t *data, uint32_t len, pdb_named_cb cb, void *userdata);
+int pdb_parse_keys    (const uint8_t *data, uint32_t len, pdb_named_cb cb, void *userdata);
+int pdb_parse_colors  (const uint8_t *data, uint32_t len, pdb_named_cb cb, void *userdata);
+int pdb_parse_artwork (const uint8_t *data, uint32_t len, pdb_named_cb cb, void *userdata);
+int pdb_parse_playlists(const uint8_t *data, uint32_t len, pdb_playlist_cb cb, void *userdata);
+int pdb_parse_playlist_entries(const uint8_t *data, uint32_t len,
+                               pdb_playlist_entry_cb cb, void *userdata);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* PDB_H */

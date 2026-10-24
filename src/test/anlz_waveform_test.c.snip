@@ -1,0 +1,338 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <math.h>
+#include <stdint.h>
+
+#include "../nfs/utf16.h"
+#include "../anlz/anlz.h"
+#include "../anlz/anlz_fake.h"
+
+//SNIP_FILE SNIP_utf16      ../nfs/utf16.c
+//SNIP_FILE SNIP_anlz_core  ../anlz/anlz.c
+//SNIP_FILE SNIP_fake_anlz  ../anlz/anlz_fake.c
+
+#include "snip_core.h"
+
+#define FIX "fixtures/anlz/"
+
+static anlz_t *open_fake(anlz_fake_t *b, uint8_t **buf)
+{
+    uint32_t len;
+    anlz_t *a = NULL;
+    *buf = anlz_fake_finish(b, &len);
+    if (anlz_open_mem(*buf, len, &a) != ANLZ_OK) a = NULL;
+    return a;
+}
+
+/* one wave tag file; returns the opened anlz_t */
+static anlz_t *wave_file(const char *fourcc, uint32_t entry_bytes, uint32_t count_field,
+                         const uint8_t *data, uint32_t len, uint8_t **buf)
+{
+    anlz_fake_t *b = anlz_fake_begin();
+    anlz_fake_add_wave(b, fourcc, entry_bytes, count_field, data, len);
+    return open_fake(b, buf);
+}
+
+/* --- synthetic --- */
+
+static void test_one_byte_kinds(void)
+{
+    /* PWAV / PWV3: low 5 bits height, high 3 bits whiteness */
+    const uint8_t d[4] = { 0x00, 0x1f, 0xe0 | 0x05, 0x63 };
+    uint8_t *buf;
+    anlz_waveform_t w;
+    anlz_wave_column_t c;
+    const char *tags[2] = { "PWAV", "PWV3" };
+    anlz_wave_kind_t kinds[2] = { ANLZ_WAVE_PREVIEW, ANLZ_WAVE_DETAIL };
+
+    for (int k = 0; k < 2; k++) {
+        anlz_t *a = wave_file(tags[k], 1, 4, d, 4, &buf);
+        snip_equals("1-byte wave: ok", ANLZ_OK, anlz_waveform(a, kinds[k], &w));
+        snip_equals("1-byte wave: count", 4, (int)w.count);
+        snip_equals("1-byte wave: entry bytes", 1, (int)w.entry_bytes);
+        snip_assert("1-byte wave: rate", w.entries_per_sec == (k ? 150.0 : 0.0));
+        snip_assert("1-byte wave: silent", anlz_wave_column(&w, 0, &c) && c.height == 0 && c.whiteness == 0);
+        snip_assert("1-byte wave: max height", anlz_wave_column(&w, 1, &c) && c.height == 31 && c.whiteness == 0);
+        snip_assert("1-byte wave: whiteness", anlz_wave_column(&w, 2, &c) && c.height == 5 && c.whiteness == 7);
+        snip_assert("1-byte wave: 0x63", anlz_wave_column(&w, 3, &c) && c.height == 3 && c.whiteness == 3 && c.raw[0] == 0x63);
+        snip_assert("1-byte wave: past end", !anlz_wave_column(&w, 4, &c));
+        anlz_close(a);
+        free(buf);
+    }
+
+    /* PWV2: 4 bit height */
+    anlz_t *a = wave_file("PWV2", 1, 2, (const uint8_t *)"\xff\x0a", 2, &buf);
+    snip_equals("pwv2: ok", ANLZ_OK, anlz_waveform(a, ANLZ_WAVE_TINY, &w));
+    snip_assert("pwv2: heights", anlz_wave_column(&w, 0, &c) && c.height == 15 && anlz_wave_column(&w, 1, &c) && c.height == 10);
+    anlz_close(a);
+    free(buf);
+}
+
+static void test_pwv5_every_value(void)
+{
+    /* every combination of red, green, blue (3 bits each) and height (5 bits), low 2 bits 0 and 3 */
+    uint32_t n = 8 * 8 * 8 * 32;
+    uint8_t *data = malloc(n * 2);
+    uint32_t i = 0;
+    for (uint32_t r = 0; r < 8; r++)
+        for (uint32_t g = 0; g < 8; g++)
+            for (uint32_t b = 0; b < 8; b++)
+                for (uint32_t h = 0; h < 32; h++, i++) {
+                    uint32_t v = (r << 13) | (g << 10) | (b << 7) | (h << 2) | (i & 3);
+                    data[i * 2] = (uint8_t)(v >> 8);
+                    data[i * 2 + 1] = (uint8_t)v;
+                }
+    uint8_t *buf;
+    anlz_t *a = wave_file("PWV5", 2, n, data, n * 2, &buf);
+    anlz_waveform_t w;
+    snip_equals("pwv5: ok", ANLZ_OK, anlz_waveform(a, ANLZ_WAVE_COLOR_DETAIL, &w));
+    snip_equals("pwv5: count", (int)n, (int)w.count);
+    int bad = 0;
+    i = 0;
+    for (uint32_t r = 0; r < 8; r++)
+        for (uint32_t g = 0; g < 8; g++)
+            for (uint32_t b = 0; b < 8; b++)
+                for (uint32_t h = 0; h < 32; h++, i++) {
+                    anlz_wave_column_t c;
+                    anlz_wave_column(&w, i, &c);
+                    if (c.height != h || c.red != r * 255 / 7 || c.green != g * 255 / 7 || c.blue != b * 255 / 7) bad++;
+                }
+    snip_equals("pwv5: all 16384 values decode", 0, bad);
+    anlz_close(a);
+    free(buf);
+    free(data);
+}
+
+static void test_color_preview_and_3band(void)
+{
+    uint8_t *buf;
+    anlz_waveform_t w;
+    anlz_wave_column_t c;
+
+    const uint8_t pv4[12] = { 42, 218, 28, 5, 26, 15, 36, 219, 12, 6, 11, 16 };
+    anlz_t *a = wave_file("PWV4", 6, 2, pv4, 12, &buf);
+    snip_equals("pwv4: ok", ANLZ_OK, anlz_waveform(a, ANLZ_WAVE_COLOR_PREVIEW, &w));
+    snip_assert("pwv4: raw 6 bytes, no decoding", anlz_wave_column(&w, 1, &c) && c.raw[0] == 36 && c.raw[5] == 16 && c.height == 0);
+    anlz_close(a); free(buf);
+
+    const uint8_t b3[6] = { 10, 20, 30, 40, 5, 6 };               /* mid, high, low */
+    a = wave_file("PWV6", 3, 2, b3, 6, &buf);
+    snip_equals("pwv6: ok", ANLZ_OK, anlz_waveform(a, ANLZ_WAVE_3BAND_PREVIEW, &w));
+    snip_assert("pwv6: bands", anlz_wave_column(&w, 0, &c) && c.mid == 10 && c.high == 20 && c.low == 30 && c.height == 30);
+    snip_assert("pwv6: bands 2", anlz_wave_column(&w, 1, &c) && c.mid == 40 && c.high == 5 && c.low == 6 && c.height == 40);
+    snip_assert("pwv6: preview has no rate", w.entries_per_sec == 0.0);
+    anlz_close(a); free(buf);
+    a = wave_file("PWV7", 3, 2, b3, 6, &buf);
+    snip_assert("pwv7: detail rate", anlz_waveform(a, ANLZ_WAVE_3BAND_DETAIL, &w) == ANLZ_OK && w.entries_per_sec == 150.0 && w.count == 2);
+    anlz_close(a); free(buf);
+}
+
+static void test_wave_edge_cases(void)
+{
+    uint8_t *buf;
+    anlz_waveform_t w;
+    anlz_wave_column_t c;
+    const uint8_t d[3] = { 1, 2, 3 };
+
+    anlz_t *a = wave_file("PWV3", 1, 9999, d, 3, &buf);                 /* claims too many */
+    snip_assert("claims too many", anlz_waveform(a, ANLZ_WAVE_DETAIL, &w) == ANLZ_OK && w.count == 3 && w.clamped);
+    snip_assert("claims too many: last readable", anlz_wave_column(&w, 2, &c) && c.height == 3 && !anlz_wave_column(&w, 3, &c));
+    anlz_close(a); free(buf);
+
+    a = wave_file("PWV3", 1, 2, d, 3, &buf);                            /* claims fewer */
+    snip_assert("claims fewer", anlz_waveform(a, ANLZ_WAVE_DETAIL, &w) == ANLZ_OK && w.count == 2 && !w.clamped);
+    anlz_close(a); free(buf);
+
+    a = wave_file("PWV5", 2, 0, NULL, 0, &buf);                         /* empty */
+    snip_assert("empty", anlz_waveform(a, ANLZ_WAVE_COLOR_DETAIL, &w) == ANLZ_OK && w.count == 0 && !anlz_wave_column(&w, 0, &c));
+    snip_equals("empty: index for time", -1, anlz_wave_index_for_time(&w, 1000, 0));
+    anlz_close(a); free(buf);
+
+    a = wave_file("PWV5", 3, 1, d, 3, &buf);                            /* wrong entry size for PWV5 */
+    snip_equals("wrong entry bytes", ANLZ_ERR_BAD_LEN, anlz_waveform(a, ANLZ_WAVE_COLOR_DETAIL, &w));
+    anlz_close(a); free(buf);
+
+    a = wave_file("PWV5", 2, 1, (const uint8_t *)"\0\0", 2, &buf);        /* other kind not present */
+    snip_equals("kind absent", ANLZ_ERR_ABSENT, anlz_waveform(a, ANLZ_WAVE_DETAIL, &w));
+    snip_equals("bad kind", ANLZ_ERR_BAD_LEN, anlz_waveform(a, (anlz_wave_kind_t)99, &w));
+    snip_equals("null", ANLZ_ERR_BAD_LEN, anlz_waveform(NULL, ANLZ_WAVE_DETAIL, &w));
+    anlz_close(a); free(buf);
+
+    /* tag shorter than its header */
+    anlz_fake_t *b = anlz_fake_begin();
+    anlz_fake_add_tag(b, "PWV3", 0x18, (const uint8_t *)"\0\0\0\1", 4);
+    a = open_fake(b, &buf);
+    snip_equals("tag too short", ANLZ_ERR_BAD_LEN, anlz_waveform(a, ANLZ_WAVE_DETAIL, &w));
+    anlz_close(a); free(buf);
+}
+
+static void test_time_helpers(void)
+{
+    uint8_t *buf;
+    anlz_waveform_t w;
+    uint8_t data[1500];
+    memset(data, 1, sizeof data);
+
+    anlz_t *a = wave_file("PWV3", 1, 1500, data, 1500, &buf);           /* 10 seconds of detail */
+    anlz_waveform(a, ANLZ_WAVE_DETAIL, &w);
+    snip_equals("detail: 0 ms", 0, anlz_wave_index_for_time(&w, 0, 0));
+    snip_equals("detail: 1 s", 150, anlz_wave_index_for_time(&w, 1000, 0));
+    snip_equals("detail: 6.66 ms", 1, anlz_wave_index_for_time(&w, 7, 99999));
+    snip_equals("detail: clamps to last", 1499, anlz_wave_index_for_time(&w, 3600000, 0));
+    anlz_close(a); free(buf);
+
+    a = wave_file("PWAV", 1, 400, data, 400, &buf);
+    anlz_waveform(a, ANLZ_WAVE_PREVIEW, &w);
+    snip_equals("preview: start", 0, anlz_wave_index_for_time(&w, 0, 200000));
+    snip_equals("preview: middle", 200, anlz_wave_index_for_time(&w, 100000, 200000));
+    snip_equals("preview: end clamps", 399, anlz_wave_index_for_time(&w, 200000, 200000));
+    snip_equals("preview: beyond end clamps", 399, anlz_wave_index_for_time(&w, 999999, 200000));
+    snip_equals("preview: unknown track length", -1, anlz_wave_index_for_time(&w, 1000, 0));
+    anlz_close(a); free(buf);
+}
+
+/* --- fixtures --- */
+
+static int expected_duration(const char *dir_id)         /* seconds, from expected.tsv; -1 if absent */
+{
+    FILE *f = fopen(FIX "expected.tsv", "r");
+    char line[1024];
+    int secs = -1;
+    if (!f) return -1;
+    while (fgets(line, sizeof line, f)) {
+        if (line[0] == '#' || !strstr(line, dir_id)) continue;
+        char *t = strchr(line, '\t');                    /* id */
+        if (t) t = strchr(t + 1, '\t');                  /* bpm */
+        if (t) t = strchr(t + 1, '\t');                  /* duration */
+        if (t) secs = atoi(t + 1);
+        break;
+    }
+    fclose(f);
+    return secs;
+}
+
+static anlz_t *open_fx(const char *file, const char *ext)
+{
+    char path[256];
+    anlz_t *a = NULL;
+    snprintf(path, sizeof path, FIX "%s_ANLZ0000.%s", file, ext);
+    if (anlz_open_file(path, &a) != ANLZ_OK) { printf("[error] cannot open %s\n", path); errors++; return NULL; }
+    return a;
+}
+
+static void check_fixture(const char *file, const char *dir_id)
+{
+    char msg[160];
+    anlz_t *dat = open_fx(file, "DAT"), *ext = open_fx(file, "EXT");
+    anlz_waveform_t pv, tiny, det, cpv, cdet, none;
+    anlz_wave_column_t c, c3;
+    if (!dat || !ext) { anlz_close(dat); anlz_close(ext); return; }
+
+    snprintf(msg, sizeof msg, "%s DAT waveforms", file);
+    snip_assert(msg, anlz_waveform(dat, ANLZ_WAVE_PREVIEW, &pv) == ANLZ_OK && anlz_waveform(dat, ANLZ_WAVE_TINY, &tiny) == ANLZ_OK);
+    snprintf(msg, sizeof msg, "%s PWAV has 400 columns, PWV2 100", file);
+    snip_assert(msg, pv.count == 400 && tiny.count == 100 && !pv.clamped && !tiny.clamped);
+    snprintf(msg, sizeof msg, "%s EXT waveforms", file);
+    snip_assert(msg, anlz_waveform(ext, ANLZ_WAVE_DETAIL, &det) == ANLZ_OK && anlz_waveform(ext, ANLZ_WAVE_COLOR_PREVIEW, &cpv) == ANLZ_OK
+                && anlz_waveform(ext, ANLZ_WAVE_COLOR_DETAIL, &cdet) == ANLZ_OK);
+    snprintf(msg, sizeof msg, "%s PWV4 has 1200 six-byte columns", file);
+    snip_assert(msg, cpv.count == 1200 && cpv.entry_bytes == 6 && !cpv.clamped);
+    snprintf(msg, sizeof msg, "%s PWV3 and PWV5 have the same entry count", file);
+    snip_assert(msg, det.count == cdet.count && det.count > 0 && !det.clamped && !cdet.clamped);
+    snprintf(msg, sizeof msg, "%s no 3-band data in this export", file);
+    snip_equals(msg, ANLZ_ERR_ABSENT, anlz_waveform(ext, ANLZ_WAVE_3BAND_DETAIL, &none));
+
+    /* length of the detail waveform (150/s) equals the track duration the database holds, within 1.5 s */
+    int secs = expected_duration(dir_id);
+    snprintf(msg, sizeof msg, "%s duration in expected.tsv", file);
+    snip_assert(msg, secs > 0);
+    double wave_secs = det.count / 150.0;
+    snprintf(msg, sizeof msg, "%s PWV5 length %.1f s matches database duration %d s", file, wave_secs, secs);
+    snip_assert(msg, fabs(wave_secs - secs) < 1.5);
+
+    /* PWV3 and PWV5 describe the same signal, but PWV5 can be one entry (6.7 ms) early or late, wholly or in places:
+     * allow a one entry shift and compare heights within 1 (real files: 90 % - 100 % agree). */
+    uint32_t close = 0;
+    for (uint32_t i = 1; i + 1 < det.count; i++) {
+        int best = 99;
+        anlz_wave_column(&det, i, &c3);
+        for (int k = -1; k <= 1; k++) {
+            anlz_wave_column(&cdet, i + k, &c);
+            int d = abs((int)c3.height - (int)c.height);
+            if (d < best) best = d;
+        }
+        if (best <= 1) close++;
+    }
+    snprintf(msg, sizeof msg, "%s PWV3 and PWV5 heights agree (+-1 entry, +-1 height) for >= 85%% of entries (%u/%u)", file, close, det.count);
+    snip_assert(msg, close * 100 >= (det.count - 2) * 85);
+
+    /* heights stay in range and the waveform is not flat for tracks with sound */
+    unsigned maxh = 0;
+    for (uint32_t i = 0; i < pv.count; i++) {
+        anlz_wave_column(&pv, i, &c);
+        if (c.height > 31 || c.whiteness > 7) maxh = 99;
+        if (c.height > maxh && maxh != 99) maxh = c.height;
+    }
+    snprintf(msg, sizeof msg, "%s PWAV heights within 0..31", file);
+    snip_assert(msg, maxh <= 31);
+
+    /* time -> entry: the middle of the track lands in the middle of every waveform */
+    uint32_t track_ms = (uint32_t)(det.count * 1000.0 / 150.0);
+    snprintf(msg, sizeof msg, "%s time to index", file);
+    snip_assert(msg, abs(anlz_wave_index_for_time(&det, track_ms / 2, 0) - (int)det.count / 2) <= 1
+                && abs(anlz_wave_index_for_time(&pv, track_ms / 2, track_ms) - 200) <= 1);
+
+    anlz_close(dat);
+    anlz_close(ext);
+}
+
+static void test_fixtures(void)
+{
+    check_fixture("P014_00001A7A", "P014/00001A7A");
+    check_fixture("P024_00023562", "P024/00023562");
+    check_fixture("P02A_0000ECBE", "P02A/0000ECBE");
+    check_fixture("P035_0002765B", "P035/0002765B");
+    check_fixture("P042_00015D16", "P042/00015D16");
+    check_fixture("P04B_000145BD", "P04B/000145BD");
+    check_fixture("P07D_0001A2E9", "P07D/0001A2E9");
+    check_fixture("P004_00028148", "P004/00028148");
+    check_fixture("P00C_0000D1E2", "P00C/0000D1E2");
+    check_fixture("P022_0002380C", "P022/0002380C");
+
+    /* exact values from the anchor track (bytes as dumped from the file) */
+    anlz_t *ext = open_fx("P042_00015D16", "EXT");
+    anlz_waveform_t w;
+    anlz_wave_column_t c;
+    snip_equals("anchor PWV5", ANLZ_OK, anlz_waveform(ext, ANLZ_WAVE_COLOR_DETAIL, &w));
+    snip_equals("anchor PWV5 entries", 52397, (int)w.count);
+    snip_assert("anchor PWV5 entry 0: ff80 = white, height 0",
+                anlz_wave_column(&w, 0, &c) && c.raw[0] == 0xff && c.raw[1] == 0x80 && c.red == 255 && c.green == 255 && c.blue == 255 && c.height == 0);
+    snip_assert("anchor PWV5 entry 10000: e60c = red 7 green 1 blue 4 height 3",
+                anlz_wave_column(&w, 10000, &c) && c.red == 255 && c.green == 36 && c.blue == 145 && c.height == 3);
+    snip_equals("anchor PWV4", ANLZ_OK, anlz_waveform(ext, ANLZ_WAVE_COLOR_PREVIEW, &w));
+    snip_assert("anchor PWV4 column 0: 2a da 1c 05 1a 0f",
+                anlz_wave_column(&w, 0, &c) && c.raw[0] == 0x2a && c.raw[1] == 0xda && c.raw[2] == 0x1c && c.raw[3] == 0x05 && c.raw[4] == 0x1a && c.raw[5] == 0x0f);
+    snip_equals("anchor PWV3", ANLZ_OK, anlz_waveform(ext, ANLZ_WAVE_DETAIL, &w));
+    snip_assert("anchor PWV3 entry 10000: 0x63 = whiteness 3 height 3", anlz_wave_column(&w, 10000, &c) && c.height == 3 && c.whiteness == 3);
+    anlz_close(ext);
+}
+
+int main(int argc, char *argv[])
+{
+    (void)argc; (void)argv;
+
+    test_one_byte_kinds();
+    test_pwv5_every_value();
+    test_color_preview_and_3band();
+    test_wave_edge_cases();
+    test_time_helpers();
+    test_fixtures();
+
+    if (errors) {
+        fprintf(stdout, "[fail] %d error(s)\n", errors);
+        return 1;
+    }
+    fprintf(stdout, "[pass] anlz_waveform_test\n");
+    return 0;
+}

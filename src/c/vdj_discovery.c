@@ -104,6 +104,12 @@ vdj_expire_players(vdj_t* v, vdj_expired_h expired_h)
  * 
  * This method blocks the thread and occupies v->discovery_unicast_socket_fd if we are doing automatic player_id discovery.
  */
+static void
+vdj_progress(vdj_t* v, int phase, int step, int steps)
+{
+    if (v->progress_h) v->progress_h(v, phase, step, steps, v->player_id);
+}
+
 int
 vdj_exec_discovery(vdj_t* v)
 {
@@ -114,6 +120,9 @@ vdj_exec_discovery(vdj_t* v)
         return CDJ_ERROR;
     }
 
+    // a managed discovery thread may already be running, it must not send keepalives until the number is claimed
+    v->claiming = 1;
+
     if (v->auto_id) {
         v->player_id = 1;
         vdj_load_player_id(v);
@@ -121,49 +130,59 @@ vdj_exec_discovery(vdj_t* v)
 
     // CDJ_DISCOVERY
     uint8_t* packet = cdj_create_initial_discovery_packet(&length, v->model);
-    if (packet == NULL) return CDJ_ERROR;
+    if (packet == NULL) { v->claiming = 0; return CDJ_ERROR; }
 
+    vdj_progress(v, VDJ_PHASE_HELLO, 1, 3);
     rv = vdj_sendto_discovery(v, packet, length);
     if (rv != CDJ_OK) {
+        v->claiming = 0;
         return CDJ_ERROR;
     }
     usleep(300000);
+    vdj_progress(v, VDJ_PHASE_HELLO, 2, 3);
     vdj_sendto_discovery(v, packet, length);
     usleep(300000);
+    vdj_progress(v, VDJ_PHASE_HELLO, 3, 3);
     vdj_sendto_discovery(v, packet, length);
     usleep(300000);
     free(packet);
 
     // CDJ_STAGE1_DISCOVERY
     packet = cdj_create_stage1_discovery_packet(&length, v->model, v->mac, 1);
-    if (packet == NULL) return CDJ_ERROR;
+    if (packet == NULL) { v->claiming = 0; return CDJ_ERROR; }
     
+    vdj_progress(v, VDJ_PHASE_MAC, 1, 3);
     vdj_sendto_discovery(v, packet, length);
     usleep(300000);
     cdj_inc_stage1_discovery_packet(packet);
+    vdj_progress(v, VDJ_PHASE_MAC, 2, 3);
     vdj_sendto_discovery(v, packet, length);
     usleep(300000);
     cdj_inc_stage1_discovery_packet(packet);
+    vdj_progress(v, VDJ_PHASE_MAC, 3, 3);
     vdj_sendto_discovery(v, packet, length);
     usleep(300000);
     free(packet);
 
     // CDJ_ID_USE_REQ/RESP
     packet = cdj_create_id_use_req_packet(&length, v->model, v->ip, v->mac, v->player_id, v->reqid = 1);
-    if (packet == NULL) return CDJ_ERROR;
+    if (packet == NULL) { v->claiming = 0; return CDJ_ERROR; }
 
+    vdj_progress(v, VDJ_PHASE_NUMBER, 1, 3);
     vdj_sendto_discovery(v, packet, length);
     vdj_check_for_id_reuse(v);
     cdj_mod_id_use_req_packet_player_id(packet, v->player_id);
 
     // n = 2
     v->reqid = cdj_inc_id_use_req_packet(packet);
+    vdj_progress(v, VDJ_PHASE_NUMBER, 2, 3);
     vdj_sendto_discovery(v, packet, length);
     vdj_check_for_id_reuse(v);
     cdj_mod_id_use_req_packet_player_id(packet, v->player_id);
 
     // n = 3
     v->reqid = cdj_inc_id_use_req_packet(packet);
+    vdj_progress(v, VDJ_PHASE_NUMBER, 3, 3);
     vdj_sendto_discovery(v, packet, length);
     vdj_check_for_id_reuse(v);
 
@@ -172,20 +191,28 @@ vdj_exec_discovery(vdj_t* v)
     // CDJ_ID_SET_REQ TODO should listen for collisions and restart, not not sure what we would expect to achieve
     // TODO could listen for OKs packets too
     packet = cdj_create_id_set_req_packet(&length, v->model, v->player_id, v->reqid = 1);
-    if (packet == NULL) return CDJ_ERROR;
+    if (packet == NULL) { v->claiming = 0; return CDJ_ERROR; }
 
+    vdj_progress(v, VDJ_PHASE_CONFIRM, 1, 3);
     vdj_sendto_discovery(v, packet, length);
     usleep(300000);
     v->reqid = cdj_inc_id_set_req_packet(packet);
+    vdj_progress(v, VDJ_PHASE_CONFIRM, 2, 3);
     vdj_sendto_discovery(v, packet, length);
     usleep(300000);
     v->reqid = cdj_inc_id_set_req_packet(packet);
+    vdj_progress(v, VDJ_PHASE_CONFIRM, 3, 3);
     vdj_sendto_discovery(v, packet, length);
     usleep(300000);
 
     v->have_id = 1;
+    v->claiming = 0;
 
     vdj_save_player_id(v);
+
+    // a real player's first keepalive follows its last claim packet at once, then every CDJ_KEEPALIVE_INTERVAL
+    vdj_send_keepalive(v);
+    vdj_progress(v, VDJ_PHASE_DONE, 1, 1);
 
     return CDJ_OK;
 }
@@ -202,10 +229,16 @@ vdj_managed_discovery_loop(void* arg)
     ssize_t len;
     uint8_t packet[1500];
 
+    // Poll the socket often: the claim acknowledgements (type 0x05) must go out at once, a real player answers
+    // within a few ms. Keepalives and expiry keep their CDJ_KEEPALIVE_INTERVAL cadence.
+    const int tick_ms = 50;
+    int elapsed_ms = 0;
+
     vdj_keepalive_running = 1;
     while (vdj_keepalive_running) {
 
-        usleep(CDJ_KEEPALIVE_INTERVAL * 1000);
+        usleep(tick_ms * 1000);
+        elapsed_ms += tick_ms;
         // read all messages off the queue once per loop
         do {
             len = recv(tinfo->v->discovery_socket_fd, packet, 1500, MSG_DONTWAIT);
@@ -219,6 +252,9 @@ vdj_managed_discovery_loop(void* arg)
                 }
             }
         } while (len > 0);
+
+        if (elapsed_ms < CDJ_KEEPALIVE_INTERVAL) continue;
+        elapsed_ms = 0;
 
         vdj_expire_players(v, NULL);
 
@@ -372,9 +408,7 @@ vdj_handle_managed_discovery_datagram(vdj_t* v, vdj_discovery_ph discovery_ph, u
                         resp = cdj_create_id_set_resp_packet(&rlen, v->model,
                                    v->player_id, d_pkt->data[0x25]);
                         if (resp) {
-                            struct sockaddr_in dest = *sender->ip_addr;
-                            dest.sin_port = htons(CDJ_DISCOVERY_PORT);
-                            vdj_sendto_update(v, &dest, resp, rlen);
+                            vdj_sendto_discovery_unicast(v, sender->ip_addr, resp, rlen);
                             free(resp);
                         }
                     }

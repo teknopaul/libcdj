@@ -52,8 +52,17 @@ typedef struct {
     uint8_t             master_new;        // new master being negotiated
 } vdj_backline_t;
 
+// progress of vdj_exec_discovery(): phase is one of VDJ_PHASE_*, step counts 1..steps within the phase, player_id is the number being claimed
+#define VDJ_PHASE_HELLO     1   // type 0x0a, 3 packets
+#define VDJ_PHASE_MAC       2   // stage 1, 3 packets
+#define VDJ_PHASE_NUMBER    3   // stage 2, player number proposed, 3 packets
+#define VDJ_PHASE_CONFIRM   4   // stage 3, player number taken, 3 packets
+#define VDJ_PHASE_DONE      5   // joined
+struct vdj_s;
+typedef void (*vdj_progress_h)(struct vdj_s* v, int phase, int step, int steps, int player_id);
+
 // Local VCDJ
-typedef struct {
+typedef struct vdj_s {
     char*               ip_address;      // string format
     struct sockaddr_in* ip_addr;         // e.g. "192.168.1.5"
     struct sockaddr_in* netmask;         // e.g. "255.255.255.0"
@@ -89,7 +98,9 @@ typedef struct {
     void*               client;         // if anyone wants to hook to our callbacks (e.g. adj_seq_info_t* adj)
     unsigned int        auto_id:1;      // automatically assign id
     unsigned int        have_id:1;      // got an id assigned
+    unsigned int        claiming:1;     // vdj_exec_discovery() is running: real players send no keepalive until the claim is done
     unsigned int        follow_master:1; // vdj should track master (in adj)
+    vdj_progress_h      progress_h;     // optional, called by vdj_exec_discovery() before each claim packet
 } vdj_t;
 
 typedef struct  {
@@ -135,6 +146,7 @@ int vdj_close_sockets(vdj_t* v);
 void vdj_print_sockaddr(char* context, struct sockaddr_in* ip);
 
 // broadcast a single keepalive
+int vdj_sendto_discovery_unicast(vdj_t* v, struct sockaddr_in* dest, unsigned char* packet, uint16_t packet_length);
 void vdj_send_keepalive(vdj_t* v);
 // unicast our status to all members
 int vdj_send_status(vdj_t* v);
@@ -173,6 +185,10 @@ void vdj_stop_managed_update_thread(vdj_t* v);
 
 int vdj_init_managed_beat_thread(vdj_t* v, vdj_beat_ph beat_ph);
 void vdj_stop_managed_beat_thread(vdj_t* v);
+
+// direct messages to ip:50001, i.e. master handoff. Needs vdj_open_sockets(), beat_unicast_ph may be NULL
+int vdj_init_managed_beat_unicast_thread(vdj_t* v, vdj_beat_unicast_ph beat_unicast_ph);
+void vdj_stop_managed_beat_unicast_thread(vdj_t* v);
 
 void vdj_stop_threads(vdj_t* v);
 

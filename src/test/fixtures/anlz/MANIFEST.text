@@ -1,0 +1,80 @@
+ANLZ test fixtures
+==================
+
+Real rekordbox analysis files copied from a rekordbox export (PIONEER/USBANLZ/...). They let the libcdj
+ANLZ parser tests run with no external data. File names are <P-dir>_<id-dir>_ANLZ0000.<ext>, i.e. the original
+path USBANLZ/<P-dir>/<id-dir>/ANLZ0000.<ext> with '/' replaced by '_'. Files are byte-for-byte copies;
+never edit or re-save them (checksums below; expected.tsv holds the matching database values).
+
+They contain the track path/title of the owner's library (in PPTH and expected.tsv), no audio.
+
+Source corpus facts (2184 tracks, 4368 analysis files + USBMNG.DAT, surveyed when these were picked)
+  - the corpus has NO .2EX files, NO PSSI (phrase) tags, NO PWV6/PWV7: those parsers need synthetic tests
+  - NO cue has a comment, NO memory points (PCOB/PCO2 type 0 is always empty), NO tempo changes (one tempo per grid)
+  - PQT2 is missing exactly when the track was not analysed (empty beat grid): 5 tracks
+  - the .DAT PCOB lists hold the same cues as the .EXT PCO2 lists (they are not empty for tracks with cues)
+  - ANLZ header: len_header 0x1c, len_file equals the file size in every file
+
+Files
+-----
+P02A_0000ECBE  -  smallest pair; track NOT analysed by rekordbox: empty PQTZ (len 24), no PQT2, no cues (10 s silence, bpm 0)
+P042_00015D16  -  anchor track used in the plan: 716 beats, 123.00 BPM, first beat 51 ms, one hot-cue LOOP (31271..39076 ms), PCO2 entry is the short 0x2c form (no comment/colour)
+P04B_000145BD  -  contains a PVB2 tag (only 2 files in the export have one); unanalysed (no PQT2, bpm 0)
+P035_0002765B  -  a PCP2 entry longer than 0x2c: carries colour bytes (7 tracks in the export do)
+P014_00001A7A  -  two hot cues (non-loop); DAT PCOB non-empty (cues are stored in both PCOB and PCO2)
+P07D_0001A2E9  -  four cues, the most of any track in the export; longest beat grid here (859 beats)
+P024_00023562  -  two loops (the only track in the export with more than one)
+
+Second export (a small rekordbox 6+ style export made on purpose, 7 tracks, three kept here):
+P004_00028148  -  loop cue B 14820..22205 ms = 16 beats (16/1) at 130.00 BPM, hot cues A (5 ms) and C; 521 beats
+P00C_0000D1E2  -  loop cue B 57795..61404 ms = 8 beats (8/1) at 133.00 BPM, hot cues A (4 ms) and C; 521 beats
+P022_0002380C  -  only two hot cues (A at 4 ms, B at 43359 ms); 525 beats
+  In this export the first hot cue (A) of every track has 00 00 96 where other cues have 00 03 e8 (PCPT bytes 0x1d..0x1f,
+  PCP2 bytes 0x11..0x13); still no memory points, comments, colours, PSSI or .2EX.
+
+USBMNG_head.DAT  -  first 256 bytes of USBANLZ/USBMNG.DAT (magic PMNG, NOT an ANLZ file; truncated copy).
+                    Negative test: the parser must reject it by magic.
+
+Per-file size, checksum and tag list (fourcc@offset(header length, tag length)); produced by an independent
+byte scanner, the parser tests compare against this
+----------------------------------------------------------------------------------------------------
+P014_00001A7A_ANLZ0000.DAT  5670 bytes  sha256=1e07b26a8939a682
+    PPTH@28(h0x10,l178) PVBR@206(h0x10,l1620) PQTZ@1826(h0x18,l3144) PWAV@4970(h0x14,l420) PWV2@5390(h0x14,l120) PCOB@5510(h0x18,l136) PCOB@5646(h0x18,l24)
+P014_00001A7A_ANLZ0000.EXT  78621 bytes  sha256=14c4d6cbb4067dc1
+    PPTH@28(h0x10,l178) PWV3@206(h0x18,l23401) PCOB@23607(h0x18,l24) PCOB@23631(h0x18,l24) PCO2@23655(h0x14,l108) PCO2@23763(h0x14,l20) PQT2@23783(h0x38,l836) PWV5@24619(h0x18,l46778) PWV4@71397(h0x18,l7224)
+P024_00023562_ANLZ0000.DAT  7954 bytes  sha256=568b490198e424bc
+    PPTH@28(h0x10,l110) PVBR@138(h0x10,l1620) PQTZ@1758(h0x18,l5440) PWAV@7198(h0x14,l420) PWV2@7618(h0x14,l120) PCOB@7738(h0x18,l192) PCOB@7930(h0x18,l24)
+P024_00023562_ANLZ0000.EXT  156250 bytes  sha256=eb30793228211778
+    PPTH@28(h0x10,l110) PWV3@138(h0x18,l49094) PCOB@49232(h0x18,l24) PCOB@49256(h0x18,l24) PCO2@49280(h0x14,l152) PCO2@49432(h0x14,l20) PQT2@49452(h0x38,l1410) PWV5@50862(h0x18,l98164) PWV4@149026(h0x18,l7224)
+P02A_0000ECBE_ANLZ0000.DAT  2384 bytes  sha256=bc5459d8e1861273
+    PPTH@28(h0x10,l124) PVBR@152(h0x10,l1620) PQTZ@1772(h0x18,l24) PWAV@1796(h0x14,l420) PWV2@2216(h0x14,l120) PCOB@2336(h0x18,l24) PCOB@2360(h0x18,l24)
+P02A_0000ECBE_ANLZ0000.EXT  12039 bytes  sha256=fe9082cd47a98abc
+    PPTH@28(h0x10,l124) PWV3@152(h0x18,l1533) PCOB@1685(h0x18,l24) PCOB@1709(h0x18,l24) PCO2@1733(h0x14,l20) PCO2@1753(h0x14,l20) PWV5@1773(h0x18,l3042) PWV4@4815(h0x18,l7224)
+P035_0002765B_ANLZ0000.DAT  6918 bytes  sha256=72f27b581c72bd0d
+    PPTH@28(h0x10,l186) PVBR@214(h0x10,l1620) PQTZ@1834(h0x18,l4440) PWAV@6274(h0x14,l420) PWV2@6694(h0x14,l120) PCOB@6814(h0x18,l80) PCOB@6894(h0x18,l24)
+P035_0002765B_ANLZ0000.EXT  123466 bytes  sha256=b87b245668b938d9
+    PPTH@28(h0x10,l186) PWV3@214(h0x18,l38252) PCOB@38466(h0x18,l24) PCOB@38490(h0x18,l24) PCO2@38514(h0x14,l68) PCO2@38582(h0x14,l20) PQT2@38602(h0x38,l1160) PWV5@39762(h0x18,l76480) PWV4@116242(h0x18,l7224)
+P042_00015D16_ANLZ0000.DAT  8160 bytes  sha256=78fa70758d05c5e2
+    PPTH@28(h0x10,l116) PVBR@144(h0x10,l1620) PQTZ@1764(h0x18,l5752) PWAV@7516(h0x14,l420) PWV2@7936(h0x14,l120) PCOB@8056(h0x18,l80) PCOB@8136(h0x18,l24)
+P042_00015D16_ANLZ0000.EXT  166227 bytes  sha256=e90294058d4aa489
+    PPTH@28(h0x10,l116) PWV3@144(h0x18,l52421) PCOB@52565(h0x18,l24) PCOB@52589(h0x18,l24) PCO2@52613(h0x14,l64) PCO2@52677(h0x14,l20) PQT2@52697(h0x38,l1488) PWV5@54185(h0x18,l104818) PWV4@159003(h0x18,l7224)
+P04B_000145BD_ANLZ0000.DAT  2434 bytes  sha256=d5b8cdcd8318d4e4
+    PPTH@28(h0x10,l174) PVBR@202(h0x10,l1620) PQTZ@1822(h0x18,l24) PWAV@1846(h0x14,l420) PWV2@2266(h0x14,l120) PCOB@2386(h0x18,l24) PCOB@2410(h0x18,l24)
+P04B_000145BD_ANLZ0000.EXT  27554 bytes  sha256=f4a508d610b50680
+    PPTH@28(h0x10,l174) PWV3@202(h0x18,l4524) PCOB@4726(h0x18,l24) PCOB@4750(h0x18,l24) PCO2@4774(h0x14,l20) PCO2@4794(h0x14,l20) PWV5@4814(h0x18,l9024) PWV4@13838(h0x18,l7224) PVB2@21062(h0x20,l6492)
+P07D_0001A2E9_ANLZ0000.DAT  9430 bytes  sha256=f00bff4925a65612
+    PPTH@28(h0x10,l130) PVBR@158(h0x10,l1620) PQTZ@1778(h0x18,l6896) PWAV@8674(h0x14,l420) PWV2@9094(h0x14,l120) PCOB@9214(h0x18,l192) PCOB@9406(h0x18,l24)
+P07D_0001A2E9_ANLZ0000.EXT  190589 bytes  sha256=899e5ef629dbd8ae
+    PPTH@28(h0x10,l130) PWV3@158(h0x18,l60379) PCOB@60537(h0x18,l80) PCOB@60617(h0x18,l24) PCO2@60641(h0x14,l196) PCO2@60837(h0x14,l20) PQT2@60857(h0x38,l1774) PWV5@62631(h0x18,l120734) PWV4@183365(h0x18,l7224)
+P004_00028148_ANLZ0000.DAT  6746 bytes  sha256=4e52fa64c2623242
+    PPTH@28(h0x10,l150) PVBR@178(h0x10,l1620) PQTZ@1798(h0x18,l4192) PWAV@5990(h0x14,l420) PWV2@6410(h0x14,l120) PCOB@6530(h0x18,l192) PCOB@6722(h0x18,l24)
+P004_00028148_ANLZ0000.EXT  116798 bytes  sha256=699ab567ce688c33
+    PPTH@28(h0x10,l150) PWV3@178(h0x18,l36034) PCOB@36212(h0x18,l24) PCOB@36236(h0x18,l24) PCO2@36260(h0x14,l152) PCO2@36412(h0x14,l20) PQT2@36432(h0x38,l1098) PWV5@37530(h0x18,l72044) PWV4@109574(h0x18,l7224)
+P00C_0000D1E2_ANLZ0000.DAT  6726 bytes  sha256=3763be1743c8ab73
+    PPTH@28(h0x10,l130) PVBR@158(h0x10,l1620) PQTZ@1778(h0x18,l4192) PWAV@5970(h0x14,l420) PWV2@6390(h0x14,l120) PCOB@6510(h0x18,l192) PCOB@6702(h0x18,l24)
+P00C_0000D1E2_ANLZ0000.EXT  114345 bytes  sha256=8f0b6bfeee0bf365
+    PPTH@28(h0x10,l130) PWV3@158(h0x18,l35223) PCOB@35381(h0x18,l24) PCOB@35405(h0x18,l24) PCO2@35429(h0x14,l152) PCO2@35581(h0x14,l20) PQT2@35601(h0x38,l1098) PWV5@36699(h0x18,l70422) PWV4@107121(h0x18,l7224)
+P022_0002380C_ANLZ0000.DAT  6690 bytes  sha256=c119cb6a83da1cce
+    PPTH@28(h0x10,l118) PVBR@146(h0x10,l1620) PQTZ@1766(h0x18,l4224) PWAV@5990(h0x14,l420) PWV2@6410(h0x14,l120) PCOB@6530(h0x18,l136) PCOB@6666(h0x18,l24)
+P022_0002380C_ANLZ0000.EXT  115110 bytes  sha256=716df7b9c49feb21
+    PPTH@28(h0x10,l118) PWV3@146(h0x18,l35494) PCOB@35640(h0x18,l24) PCOB@35664(h0x18,l24) PCO2@35688(h0x14,l108) PCO2@35796(h0x14,l20) PQT2@35816(h0x38,l1106) PWV5@36922(h0x18,l70964) PWV4@107886(h0x18,l7224)

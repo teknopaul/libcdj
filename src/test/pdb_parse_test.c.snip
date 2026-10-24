@@ -100,6 +100,25 @@ static void test_bpm_zero(void)
     free(buf);
 }
 
+/* Test 3b: non-ASCII UTF-16LE decode (BMP, 2-byte, and surrogate pair) */
+static void test_utf16_decode(void)
+{
+    char out[64];
+    /* "Rebūke" - U+016B has a non-zero high byte */
+    const uint8_t a[] = { 'R',0,'e',0,'b',0, 0x6B,0x01, 'k',0,'e',0 };
+    snip_equals("utf16: decode ok", 0, utf16le_decode(a, sizeof a, out, sizeof out));
+    snip_assert("utf16: Rebūke", strcmp(out, "Reb\xc5\xabke") == 0);
+    /* first char non-ASCII must not be mistaken for ASCII */
+    const uint8_t b[] = { 0x6B,0x01, 'x',0 };
+    utf16le_decode(b, sizeof b, out, sizeof out);
+    snip_assert("utf16: leading non-ASCII", strcmp(out, "\xc5\xabx") == 0);
+    /* U+1F3B5 as surrogate pair D83C DFB5 */
+    const uint8_t c[] = { 0x3C,0xD8, 0xB5,0xDF };
+    utf16le_decode(c, sizeof c, out, sizeof out);
+    snip_assert("utf16: surrogate pair", strcmp(out, "\xf0\x9f\x8e\xb5") == 0);
+    snip_equals("utf16: too small", -1, utf16le_decode(a, sizeof a, out, 4));
+}
+
 /* Test 4: Bad / short input returns -1 */
 static void test_bad_input(void)
 {
@@ -110,6 +129,61 @@ static void test_bad_input(void)
 
 /* Test 5: Real fixture — count tracks and spot-check last parsed track.
  * Silently skipped when fixtures/export.pdb is absent. */
+static int g_rows;
+static char g_first[128];
+static int named_cb(const pdb_named_t *r, void *ud)
+{
+    (void)ud;
+    if (g_rows++ == 0) snprintf(g_first, sizeof(g_first), "%s", r->name ? r->name : "");
+    return 0;
+}
+static int album_cb(const pdb_album_t *r, void *ud)
+{
+    (void)ud;
+    if (g_rows++ == 0) snprintf(g_first, sizeof(g_first), "%s", r->name ? r->name : "");
+    return 0;
+}
+static int playlist_cb(const pdb_playlist_t *r, void *ud)
+{
+    (void)ud; (void)r;
+    g_rows++;
+    return 0;
+}
+static int entry_cb(const pdb_playlist_entry_t *r, void *ud)
+{
+    (void)ud;
+    if (g_rows++ == 0) snprintf(g_first, sizeof(g_first), "%u/%u", r->track_id, r->playlist_id);
+    return 0;
+}
+
+static void test_real_tables(const uint8_t *buf, uint32_t len)
+{
+    g_rows = 0; pdb_parse_genres(buf, len, named_cb, NULL);
+    snip_assert("real genres: some", g_rows > 0);
+    snip_assert("real genres: first", strcmp(g_first, "Tech House") == 0);
+
+    g_rows = 0; pdb_parse_artists(buf, len, named_cb, NULL);
+    snip_assert("real artists: some", g_rows > 0);
+    snip_assert("real artists: first", strcmp(g_first, "Ramon Bedoya") == 0);
+
+    g_rows = 0; pdb_parse_albums(buf, len, album_cb, NULL);
+    snip_assert("real albums: some", g_rows > 0);
+    snip_assert("real albums: first", strcmp(g_first, "Antamawa") == 0);
+
+    g_rows = 0; pdb_parse_keys(buf, len, named_cb, NULL);
+    snip_assert("real keys: first", g_rows > 0 && strcmp(g_first, "Bmin") == 0);
+
+    g_rows = 0; pdb_parse_colors(buf, len, named_cb, NULL);
+    snip_equals("real colors: 8", 8, g_rows);
+
+    g_rows = 0; pdb_parse_playlists(buf, len, playlist_cb, NULL);
+    snip_assert("real playlists: some", g_rows > 0);
+
+    g_rows = 0; pdb_parse_playlist_entries(buf, len, entry_cb, NULL);
+    snip_assert("real playlist entries: some", g_rows > 0);
+    snip_assert("real playlist entries: first", strcmp(g_first, "1/1") == 0);
+}
+
 static void test_real_fixture(void)
 {
     FILE *f = fopen("fixtures/export.pdb", "rb");
@@ -137,6 +211,8 @@ static void test_real_fixture(void)
     printf("  last bpm:     %.2f  dur: %us\n",
            g_bpm_x100 / 100.0, g_duration_secs);
 
+    test_real_tables(buf, (uint32_t)sz);
+
     free(buf);
 }
 
@@ -147,6 +223,7 @@ int main(int argc, char *argv[])
     test_fake_pdb_basic();
     test_fake_pdb_id();
     test_bpm_zero();
+    test_utf16_decode();
     test_bad_input();
     test_real_fixture();
 

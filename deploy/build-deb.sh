@@ -58,7 +58,7 @@ mv $tmp_dir/$lib_dir/libvdj.so $tmp_dir/$lib_dir/libvdj.so.1.0
 (cd $tmp_dir/$lib_dir; ln -s libcdj.so.1.0 libcdj.so; ln -s libvdj.so.1.0 libvdj.so)
 
 # hdrs
-cp --archive src/c/*.h \
+cp --archive src/c/*.h src/nfs/pdb.h src/anlz/anlz.h \
     $tmp_dir/usr/include/cdj
 
 size=$(du -sk $tmp_dir | cut -f 1)
