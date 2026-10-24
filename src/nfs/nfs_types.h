@@ -27,6 +27,7 @@ typedef struct {
 
 typedef struct export_entry {
     dirpath_t           filesystem;
+    dirpath_t           group;          /* optional: one group name ("*" = everybody) listed after the path; len 0 = none */
     struct export_entry *next;
 } export_entry_t;
 

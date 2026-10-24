@@ -54,6 +54,63 @@ static unsigned _Atomic vdj_beat_unicast_running = ATOMIC_VAR_INIT(0); // master
 static unsigned _Atomic vdj_update_running = ATOMIC_VAR_INIT(0);    // read other statuses
 static unsigned _Atomic vdj_status_running = ATOMIC_VAR_INIT(0);    // send status
 
+// Worker threads are joinable and joined by their vdj_stop_*() function (and by vdj_destroy()), so that when a stop
+// returns the thread no longer touches the vdj_t or its sockets. Their loops wake at least every VDJ_RECV_TIMEOUT_MS.
+#define VDJ_RECV_TIMEOUT_MS 100
+static pthread_mutex_t vdj_jthread_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+int
+vdj_jthread_start(vdj_jthread_t* t, void* (*fn)(void*), void* arg)
+{
+    int rc;
+    vdj_jthread_join(t);              // reap a previous thread of this kind that exited by itself
+    pthread_mutex_lock(&vdj_jthread_mutex);
+    rc = pthread_create(&t->id, NULL, fn, arg);
+    t->on = (rc == 0);
+    pthread_mutex_unlock(&vdj_jthread_mutex);
+    return rc == 0 ? CDJ_OK : CDJ_ERROR;
+}
+
+void
+vdj_jthread_join(vdj_jthread_t* t)
+{
+    pthread_t id;
+    int on;
+    pthread_mutex_lock(&vdj_jthread_mutex);
+    on = t->on;
+    id = t->id;
+    pthread_mutex_unlock(&vdj_jthread_mutex);
+    if (!on || pthread_equal(id, pthread_self())) return;     // never join ourselves (a handler that calls stop)
+    pthread_join(id, NULL);
+    pthread_mutex_lock(&vdj_jthread_mutex);
+    t->on = 0;
+    pthread_mutex_unlock(&vdj_jthread_mutex);
+}
+
+static vdj_jthread_t vdj_discovery_thread, vdj_beat_thread, vdj_update_thread, vdj_status_thread, vdj_beat_unicast_thread;
+
+// recv() that wakes up regularly: returns the length, 0 for "timed out, look at the running flag again", -1 for an error
+static ssize_t
+vdj_recv_wait(int fd, unsigned char* packet, size_t size)
+{
+    ssize_t len = recv(fd, packet, size, 0);
+    if (len == -1 && (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)) return 0;
+    return len;
+}
+
+// closing twice is harmless: the descriptor is cleared (0 = not open)
+static int
+vdj_close_fd(int* fd, const char* what)
+{
+    int res = 0;
+    if (*fd > 0) {
+        res = close(*fd);
+        if (res) fprintf(stderr, "error: %s udp socket close '%s'\n", what, strerror(errno));
+        *fd = 0;
+    }
+    return res ? CDJ_ERROR : CDJ_OK;
+}
+
 
 static int vdj_open_discovery_socket(vdj_t* v);
 static int vdj_open_discovery_unicast_socket(vdj_t* v);
@@ -201,6 +258,7 @@ int
 vdj_destroy(vdj_t* v)
 {
     int i;
+    vdj_stop_threads(v);              // joins the workers: nothing may use v or its sockets after this
     int res = vdj_close_sockets(v);
     if (v->backline) {
         for (i = 0; i < VDJ_MAX_BACKLINE; i++) {
@@ -262,6 +320,13 @@ vdj_send_status(vdj_t* v)
         if (pkt == NULL) {
             return CDJ_ERROR;
         }
+        if (v->usb_loaded && length > 0x74) {
+            // What a real player sends with a stick mounted (captures prolink-w-tcp, prolink-deck-to-deck-transfer): the USB slot state
+            // 0x6f is 00 instead of 04 (no stick), 0x74 is 01, and 0x6a flips between 04 and 06 about every half second (the activity light).
+            pkt[0x6f] = 0x00;
+            pkt[0x74] = 0x01;
+            pkt[0x6a] = ((v->status_counter / 3) & 1) ? 0x06 : 0x04;
+        }
 
         for ( i = 0; i < VDJ_MAX_BACKLINE; i++) {
             if ( (m = v->backline->link_members[i]) && m->ip_addr) {
@@ -281,10 +346,9 @@ static void*
 vdj_status_loop(void* arg)
 {
     vdj_t* v = arg;
-    vdj_status_running = 1;
     while (vdj_status_running) {
         usleep(CDJ_STATUS_INTERVAL * 1000);
-        vdj_send_status(v);
+        if (vdj_status_running) vdj_send_status(v);
     }
     return NULL;
 }
@@ -295,9 +359,11 @@ vdj_status_loop(void* arg)
 int
 vdj_init_status_thread(vdj_t* v)
 {
-    pthread_t thread_id;
-    int s = pthread_create(&thread_id, NULL, vdj_status_loop, v);
-    if (s != 0) {
+    if (vdj_status_running) return CDJ_OK;
+    vdj_jthread_join(&vdj_status_thread);       // a thread that ended by itself
+    vdj_status_running = 1;
+    if (vdj_jthread_start(&vdj_status_thread, vdj_status_loop, v) != CDJ_OK) {
+        vdj_status_running = 0;
         return CDJ_ERROR;
     }
     return CDJ_OK;
@@ -307,8 +373,10 @@ void
 vdj_stop_status_thread(vdj_t* v)
 {
     vdj_status_running = 0;
+    vdj_jthread_join(&vdj_status_thread);
 }
 
+// Stop every worker thread and wait for it. Call before vdj_close_sockets().
 void
 vdj_stop_threads(vdj_t* v)
 {
@@ -317,6 +385,11 @@ vdj_stop_threads(vdj_t* v)
     vdj_beat_unicast_running = 0;
     vdj_update_running = 0;
     vdj_status_running = 0;
+    vdj_jthread_join(&vdj_status_thread);
+    vdj_jthread_join(&vdj_discovery_thread);
+    vdj_jthread_join(&vdj_beat_thread);
+    vdj_jthread_join(&vdj_update_thread);
+    vdj_jthread_join(&vdj_beat_unicast_thread);
     vdj_stop_keepalive_thread();
 }
 
@@ -490,6 +563,14 @@ vdj_open_socket(vdj_t* v, int port, int broadcast, int *socket_fd_out)
         src_addr.sin_port = htons(port);
     }
 
+    // receive timeout: the worker threads must notice a stop request without waiting for a packet
+    {
+        struct timeval tv;
+        tv.tv_sec = 0;
+        tv.tv_usec = VDJ_RECV_TIMEOUT_MS * 1000;
+        setsockopt(socket_fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    }
+
     // bind socket to local port
     if ( bind(socket_fd, (struct sockaddr *) &src_addr, sizeof(src_addr)) < 0) {
         fprintf(stderr, "error: bind %s:%d\n", v->ip_address, port);
@@ -539,11 +620,7 @@ vdj_open_discovery_socket(vdj_t* v)
 static int
 vdj_close_discovery_socket(vdj_t* v)
 {
-    if (v->discovery_socket_fd && close(v->discovery_socket_fd) ) {
-        fprintf(stderr, "error: discovery socket udp socket close '%s'\n", strerror(errno));
-        return CDJ_ERROR;
-    }
-    return CDJ_OK;
+    return vdj_close_fd(&v->discovery_socket_fd, "discovery socket");
 }
 
 /**
@@ -559,11 +636,7 @@ vdj_open_discovery_unicast_socket(vdj_t* v)
 static int
 vdj_close_discovery_unicast_socket(vdj_t* v)
 {
-    if (v->discovery_unicast_socket_fd && close(v->discovery_unicast_socket_fd) ) {
-        fprintf(stderr, "error: discovery unicast socket udp socket close '%s'\n", strerror(errno));
-        return CDJ_ERROR;
-    }
-    return CDJ_OK;
+    return vdj_close_fd(&v->discovery_unicast_socket_fd, "discovery unicast socket");
 }
 
 /**
@@ -578,11 +651,7 @@ vdj_open_update_socket(vdj_t* v)
 static int
 vdj_close_update_socket(vdj_t* v)
 {
-    if (v->update_socket_fd && close(v->update_socket_fd) ) {
-        fprintf(stderr, "error: update udp socket close '%s'\n", strerror(errno));
-        return CDJ_ERROR;
-    }
-    return CDJ_OK;
+    return vdj_close_fd(&v->update_socket_fd, "update");
 }
 
 /**
@@ -598,11 +667,7 @@ vdj_open_beat_socket(vdj_t* v)
 static int
 vdj_close_beat_socket(vdj_t* v)
 {
-    if (v->beat_socket_fd && close(v->beat_socket_fd) ) {
-        fprintf(stderr, "error: beat udp socket close '%s'\n", strerror(errno));
-        return CDJ_ERROR;
-    }
-    return CDJ_OK;
+    return vdj_close_fd(&v->beat_socket_fd, "beat");
 }
 
 /**
@@ -618,11 +683,7 @@ vdj_open_beat_unicast_socket(vdj_t* v)
 static int
 vdj_close_beat_unicast_socket(vdj_t* v)
 {
-    if (v->beat_unicast_socket_fd && close(v->beat_unicast_socket_fd) ) {
-        fprintf(stderr, "error: beat unicast udp socket close '%s'\n", strerror(errno));
-        return CDJ_ERROR;
-    }
-    return CDJ_OK;
+    return vdj_close_fd(&v->beat_unicast_socket_fd, "beat unicast");
 }
 
 /**
@@ -637,11 +698,7 @@ vdj_open_send_socket(vdj_t* v)
 static int
 vdj_close_send_socket(vdj_t* v)
 {
-    if (v->send_socket_fd && close(v->send_socket_fd) ) {
-        fprintf(stderr, "error: send udp socket close '%s'\n", strerror(errno));
-        return CDJ_ERROR;
-    }
-    return CDJ_OK;
+    return vdj_close_fd(&v->send_socket_fd, "send");
 }
 // output
 
@@ -750,15 +807,18 @@ vdj_discovery_loop(void* arg)
     unsigned char packet[1500];
 
     while (vdj_discovery_running) {
-        len = recv(tinfo->v->discovery_socket_fd, packet, 1500, 0);
+        len = vdj_recv_wait(tinfo->v->discovery_socket_fd, packet, 1500);
+        if (len == 0) continue;
         if (len == -1) {
-            fprintf(stderr, "error: socket read '%s'", strerror(errno));
-            return NULL;
+            if (vdj_discovery_running) fprintf(stderr, "error: socket read '%s'", strerror(errno));
+            break;
         } else {
             if ( ! cdj_validate_header(packet, len)) discovery_handler(tinfo->v, packet, len);
         }
     }
 
+    vdj_discovery_running = 0;
+    free(tinfo);
     return NULL;
 }
 
@@ -766,19 +826,26 @@ int
 vdj_init_discovery_thread(vdj_t* v, vdj_discovery_handler discovery_handler)
 {
     if (vdj_discovery_running) return CDJ_ERROR;
-    vdj_discovery_running = 1;
 
-    pthread_t thread_id;
     vdj_thread_info* tinfo = (vdj_thread_info*) calloc(1, sizeof(vdj_thread_info));
+    if (!tinfo) return CDJ_ERROR;
     tinfo->v = v;
     tinfo->handler = discovery_handler;
-    return pthread_create(&thread_id, NULL, &vdj_discovery_loop, tinfo);
+    vdj_jthread_join(&vdj_discovery_thread);       // a thread that ended by itself
+    vdj_discovery_running = 1;
+    if (vdj_jthread_start(&vdj_discovery_thread, &vdj_discovery_loop, tinfo) != CDJ_OK) {
+        vdj_discovery_running = 0;
+        free(tinfo);
+        return CDJ_ERROR;
+    }
+    return CDJ_OK;
 }
 
 void
 vdj_stop_discovery_thread(vdj_t* v)
 {
     vdj_discovery_running = 0;
+    vdj_jthread_join(&vdj_discovery_thread);
 }
 
 
@@ -792,33 +859,43 @@ vdj_beat_loop(void* arg)
     ssize_t len;
     unsigned char packet[1500];
 
-    vdj_beat_running = 1;
     while (vdj_beat_running) {
-        len = recv(tinfo->v->beat_socket_fd, packet, 1500, 0);
+        len = vdj_recv_wait(tinfo->v->beat_socket_fd, packet, 1500);
+        if (len == 0) continue;
         if (len == -1) {
-            fprintf(stderr, "error: socket read '%s'", strerror(errno));
-            return NULL;
+            if (vdj_beat_running) fprintf(stderr, "error: socket read '%s'", strerror(errno));
+            break;
         } else {
             if ( ! cdj_validate_header(packet, len) ) beat_handler(tinfo->v, packet, len);
         }
     }
+    vdj_beat_running = 0;
+    free(tinfo);
     return NULL;
 }
 
 int
 vdj_init_beat_thread(vdj_t* v, vdj_beat_handler beat_handler)
 {
-    pthread_t thread_id;
     vdj_thread_info* tinfo = (vdj_thread_info*) calloc(1, sizeof(vdj_thread_info));
+    if (!tinfo) return CDJ_ERROR;
     tinfo->v = v;
     tinfo->handler = beat_handler;
-    return pthread_create(&thread_id, NULL, &vdj_beat_loop, tinfo);
+    vdj_jthread_join(&vdj_beat_thread);       // a thread that ended by itself
+    vdj_beat_running = 1;
+    if (vdj_jthread_start(&vdj_beat_thread, &vdj_beat_loop, tinfo) != CDJ_OK) {
+        vdj_beat_running = 0;
+        free(tinfo);
+        return CDJ_ERROR;
+    }
+    return CDJ_OK;
 }
 
 void
 vdj_stop_beat_thread(vdj_t* v)
 {
     vdj_beat_running = 0;
+    vdj_jthread_join(&vdj_beat_thread);
 }
 
 
@@ -832,34 +909,44 @@ vdj_managed_beat_loop(void* arg)
     ssize_t len;
     unsigned char packet[1500];
 
-    vdj_beat_running = 1;
     while (vdj_beat_running) {
-        len = recv(tinfo->v->beat_socket_fd, packet, 1500, 0);
+        len = vdj_recv_wait(tinfo->v->beat_socket_fd, packet, 1500);
+        if (len == 0) continue;
         if (len == -1) {
-            fprintf(stderr, "error: socket read '%s'", strerror(errno));
-            return NULL;
+            if (vdj_beat_running) fprintf(stderr, "error: socket read '%s'", strerror(errno));
+            break;
         } else {
             if ( ! cdj_validate_header(packet, len) ) {
                 vdj_handle_managed_beat_datagram(v, beat_ph, packet, len);
             }
         }
     }
+    vdj_beat_running = 0;
+    free(tinfo);
     return NULL;
 }
 
 int
 vdj_init_managed_beat_thread(vdj_t* v, vdj_beat_ph beat_ph)
 {
-    pthread_t thread_id;
     vdj_thread_info* tinfo = (vdj_thread_info*) calloc(1, sizeof(vdj_thread_info));
+    if (!tinfo) return CDJ_ERROR;
     tinfo->v = v;
     tinfo->handler = beat_ph;
-    return pthread_create(&thread_id, NULL, &vdj_managed_beat_loop, tinfo);
+    vdj_jthread_join(&vdj_beat_thread);       // a thread that ended by itself
+    vdj_beat_running = 1;
+    if (vdj_jthread_start(&vdj_beat_thread, &vdj_managed_beat_loop, tinfo) != CDJ_OK) {
+        vdj_beat_running = 0;
+        free(tinfo);
+        return CDJ_ERROR;
+    }
+    return CDJ_OK;
 }
 void
 vdj_stop_managed_beat_thread(vdj_t* v)
 {
     vdj_beat_running = 0;
+    vdj_jthread_join(&vdj_beat_thread);
 }
 
 
@@ -983,7 +1070,6 @@ vdj_managed_beat_unicast_loop(void* arg)
         }
         if ( ! cdj_validate_header(packet, len) ) vdj_handle_managed_beat_unicast_datagram(v, beat_unicast_ph, packet, len);
     }
-    vdj_beat_unicast_running = 0;
     free(tinfo);
     return NULL;
 }
@@ -997,7 +1083,6 @@ vdj_managed_beat_unicast_loop(void* arg)
 int
 vdj_init_managed_beat_unicast_thread(vdj_t* v, vdj_beat_unicast_ph beat_unicast_ph)
 {
-    pthread_t thread_id;
     vdj_thread_info* tinfo;
 
     if (vdj_beat_unicast_running) return CDJ_ERROR;
@@ -1009,24 +1094,24 @@ vdj_init_managed_beat_unicast_thread(vdj_t* v, vdj_beat_unicast_ph beat_unicast_
     tinfo->handler = beat_unicast_ph;
 
     // set before the thread starts so that an immediate stop is not lost
+    vdj_jthread_join(&vdj_beat_unicast_thread);       // a thread that ended by itself
     vdj_beat_unicast_running = 1;
-    if (pthread_create(&thread_id, NULL, &vdj_managed_beat_unicast_loop, tinfo)) {
+    if (vdj_jthread_start(&vdj_beat_unicast_thread, &vdj_managed_beat_unicast_loop, tinfo) != CDJ_OK) {
         vdj_beat_unicast_running = 0;
         free(tinfo);
         return CDJ_ERROR;
     }
-    pthread_detach(thread_id);
     return CDJ_OK;
 }
 
 /**
- * Ask the thread to stop, it exits within VDJ_UNICAST_POLL_MS.
- * Does not close the socket, wait a little before vdj_close_sockets().
+ * Stop the thread and wait for it (it wakes within VDJ_UNICAST_POLL_MS). The socket is closed by vdj_close_sockets().
  */
 void
 vdj_stop_managed_beat_unicast_thread(vdj_t* v)
 {
     vdj_beat_unicast_running = 0;
+    vdj_jthread_join(&vdj_beat_unicast_thread);
 }
 
 // cleint managed updates
@@ -1040,34 +1125,44 @@ vdj_update_loop(void* arg)
     ssize_t len;
     unsigned char packet[1500];
 
-    vdj_update_running = 1;
     while (vdj_update_running) {
-        len = recv(tinfo->v->update_socket_fd, packet, 1500, 0);
+        len = vdj_recv_wait(tinfo->v->update_socket_fd, packet, 1500);
+        if (len == 0) continue;
         if (len == -1) {
-            fprintf(stderr, "error: socket read '%s'", strerror(errno));
-            return NULL;
+            if (vdj_update_running) fprintf(stderr, "error: socket read '%s'", strerror(errno));
+            break;
         } else {
             if ( ! cdj_validate_header(packet, len) ) update_handler(tinfo->v, packet, len);
         }
     }
 
+    vdj_update_running = 0;
+    free(tinfo);
     return NULL;
 }
 
 int
 vdj_init_update_thread(vdj_t* v, vdj_update_handler update_handler)
 {
-    pthread_t thread_id;
     vdj_thread_info* tinfo = (vdj_thread_info*) calloc(1, sizeof(vdj_thread_info));
+    if (!tinfo) return CDJ_ERROR;
     tinfo->v = v;
     tinfo->handler = update_handler;
-    return pthread_create(&thread_id, NULL, &vdj_update_loop, tinfo);
+    vdj_jthread_join(&vdj_update_thread);       // a thread that ended by itself
+    vdj_update_running = 1;
+    if (vdj_jthread_start(&vdj_update_thread, &vdj_update_loop, tinfo) != CDJ_OK) {
+        vdj_update_running = 0;
+        free(tinfo);
+        return CDJ_ERROR;
+    }
+    return CDJ_OK;
 }
 
 void
 vdj_stop_update_thread(vdj_t* v)
 {
     vdj_update_running = 0;
+    vdj_jthread_join(&vdj_update_thread);
 }
 
 // managed update thread, this handles other CDJ status messages
@@ -1083,16 +1178,18 @@ vdj_managed_update_loop(void* arg)
     ssize_t len;
     unsigned char packet[1500];
 
-    vdj_update_running = 1;
     while (vdj_update_running) {
-        len = recv(v->update_socket_fd, packet, 1500, 0);
+        len = vdj_recv_wait(v->update_socket_fd, packet, 1500);
+        if (len == 0) continue;
         if (len == -1) {
-            fprintf(stderr, "socket read error: %s", strerror(errno));
-            return NULL;
+            if (vdj_update_running) fprintf(stderr, "socket read error: %s", strerror(errno));
+            break;
         } else {
             if ( ! cdj_validate_header(packet, len) ) vdj_handle_managed_update_datagram(v, update_ph, packet, len);
         }
     }
+    vdj_update_running = 0;
+    free(tinfo);
     return NULL;
 }
 
@@ -1106,12 +1203,15 @@ vdj_init_managed_update_thread(vdj_t* v, vdj_update_ph update_ph)
         return CDJ_ERROR;
     }
 
-    pthread_t thread_id;
     vdj_thread_info* tinfo = (vdj_thread_info*) calloc(1, sizeof(vdj_thread_info));
+    if (!tinfo) return CDJ_ERROR;
     tinfo->v = v;
     tinfo->handler = update_ph;
-    int s = pthread_create(&thread_id, NULL, vdj_managed_update_loop, tinfo);
-    if (s != 0) {
+    vdj_jthread_join(&vdj_update_thread);       // a thread that ended by itself
+    vdj_update_running = 1;
+    if (vdj_jthread_start(&vdj_update_thread, vdj_managed_update_loop, tinfo) != CDJ_OK) {
+        vdj_update_running = 0;
+        free(tinfo);
         return CDJ_ERROR;
     }
     return CDJ_OK;
@@ -1126,6 +1226,10 @@ vdj_handle_managed_update_datagram(vdj_t* v, vdj_update_ph update_ph, unsigned c
     uint32_t sync_counter;
 
     switch (type) {
+
+        default:
+            if (v->raw_update_h) v->raw_update_h(v, packet, len);
+            break;
 
         case CDJ_STATUS : {
 
@@ -1170,6 +1274,7 @@ void
 vdj_stop_managed_update_thread(vdj_t* v)
 {
     vdj_update_running = 0;
+    vdj_jthread_join(&vdj_update_thread);
 }
 
 

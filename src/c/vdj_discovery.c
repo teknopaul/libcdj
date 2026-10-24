@@ -28,6 +28,7 @@
 
 
 static unsigned _Atomic vdj_keepalive_running = ATOMIC_VAR_INIT(0);
+static vdj_jthread_t vdj_discovery_keepalive_thread;      // the managed discovery loop or the plain keepalive loop, never both
 
 /**
  * verify the reply is about the current player id  0x24 == v->player_id
@@ -234,7 +235,6 @@ vdj_managed_discovery_loop(void* arg)
     const int tick_ms = 50;
     int elapsed_ms = 0;
 
-    vdj_keepalive_running = 1;
     while (vdj_keepalive_running) {
 
         usleep(tick_ms * 1000);
@@ -245,7 +245,7 @@ vdj_managed_discovery_loop(void* arg)
             if (len == -1) {
                 if (errno == EAGAIN) break;
                 fprintf(stderr, "error: socket read '%s'", strerror(errno));
-                return NULL;
+                break;
             } else if (len > 0) {
                 if ( ! cdj_validate_header(packet, len) )  {
                     vdj_handle_managed_discovery_datagram(v, discovery_ph, packet, len);
@@ -264,6 +264,8 @@ vdj_managed_discovery_loop(void* arg)
         while ( recv(tinfo->v->discovery_unicast_socket_fd, packet, 1500, MSG_DONTWAIT) > 0 );
     }
 
+    vdj_keepalive_running = 0;
+    free(tinfo);
     return NULL;
 }
 
@@ -272,6 +274,7 @@ void
 vdj_stop_managed_discovery_thread(vdj_t* v)
 {
     vdj_keepalive_running = 0;
+    vdj_jthread_join(&vdj_discovery_keepalive_thread);
 }
 
 int
@@ -280,17 +283,23 @@ vdj_init_managed_discovery_thread(vdj_t* v, vdj_discovery_ph discovery_ph)
     uint8_t packet[1500];
 
     if (vdj_keepalive_running) return CDJ_ERROR;
-    vdj_keepalive_running = 1;
+    vdj_jthread_join(&vdj_discovery_keepalive_thread);       // a thread that ended by itself
 
 
     // drain_multicast
     while ( recv(v->discovery_socket_fd, packet, 1500, MSG_DONTWAIT) > 0 );
 
-    pthread_t thread_id;
     vdj_thread_info* tinfo = (vdj_thread_info*) calloc(1, sizeof(vdj_thread_info));
+    if (!tinfo) return CDJ_ERROR;
     tinfo->v = v;
     tinfo->handler = discovery_ph;
-    return pthread_create(&thread_id, NULL, &vdj_managed_discovery_loop, tinfo);
+    vdj_keepalive_running = 1;
+    if (vdj_jthread_start(&vdj_discovery_keepalive_thread, &vdj_managed_discovery_loop, tinfo) != CDJ_OK) {
+        vdj_keepalive_running = 0;
+        free(tinfo);
+        return CDJ_ERROR;
+    }
+    return CDJ_OK;
 }
 
 
@@ -299,14 +308,16 @@ static void*
 vdj_keepalive_loop(void* arg)
 {
     vdj_t* v = arg;
+    const int tick_ms = 50;
+    int elapsed_ms = 0;
 
-    vdj_keepalive_running = 1;
     while (vdj_keepalive_running) {
-
-        usleep(CDJ_KEEPALIVE_INTERVAL * 1000);
+        usleep(tick_ms * 1000);                  // short sleeps: a stop is noticed quickly
+        elapsed_ms += tick_ms;
+        if (elapsed_ms < CDJ_KEEPALIVE_INTERVAL) continue;
+        elapsed_ms = 0;
 
         vdj_send_keepalive(v);
-
     }
 
     return NULL;
@@ -316,16 +327,20 @@ void
 vdj_stop_keepalive_thread()
 {
     vdj_keepalive_running = 0;
+    vdj_jthread_join(&vdj_discovery_keepalive_thread);
 }
 
 int
 vdj_init_keepalive_thread(vdj_t* v)
 {
     if (vdj_keepalive_running) return CDJ_ERROR;
+    vdj_jthread_join(&vdj_discovery_keepalive_thread);
     vdj_keepalive_running = 1;
-
-    pthread_t thread_id;
-    return pthread_create(&thread_id, NULL, &vdj_keepalive_loop, v);
+    if (vdj_jthread_start(&vdj_discovery_keepalive_thread, &vdj_keepalive_loop, v) != CDJ_OK) {
+        vdj_keepalive_running = 0;
+        return CDJ_ERROR;
+    }
+    return CDJ_OK;
 }
 
 // handle discovery of other link members,

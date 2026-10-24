@@ -114,6 +114,7 @@ void mount_export_free(export_entry_t *list) {
     while (list) {
         export_entry_t *next = list->next;
         free(list->filesystem.val);
+        free(list->group.val);
         free(list);
         list = next;
     }

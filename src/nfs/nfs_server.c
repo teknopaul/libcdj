@@ -367,8 +367,10 @@ static int dispatch_nfs(xdr_t *rx, xdr_t *tx, rpc_call_hdr_t *hdr,
     case 12: /* SYMLINK */
     case 13: /* MKDIR */
     case 14: /* RMDIR */
+        if (ops->unserved) ops->unserved(ctx, NFS_PROG, hdr->proc);
         return handle_nfs_rofs(tx, hdr->xid);
     default:
+        if (ops->unserved) ops->unserved(ctx, NFS_PROG, hdr->proc);
         return encode_proc_unavail(tx, hdr->xid);
     }
 }

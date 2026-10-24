@@ -2,6 +2,7 @@
 #ifndef _VDJ_H_INCLUDED_
 #define _VDJ_H_INCLUDED_
 
+#include <pthread.h>
 #include "cdj.h"
 
 #define VDJ_OK          0
@@ -61,6 +62,10 @@ typedef struct {
 struct vdj_s;
 typedef void (*vdj_progress_h)(struct vdj_s* v, int phase, int step, int steps, int player_id);
 
+// A packet on the status port (50002) that the library does not handle itself, for example a media query (type 0x05) from a player
+// that wants to know about the stick in our slot. Called on the update thread; the packet is only valid during the call.
+typedef void (*vdj_raw_update_h)(struct vdj_s* v, const unsigned char* packet, unsigned short len);
+
 // Local VCDJ
 typedef struct vdj_s {
     char*               ip_address;      // string format
@@ -101,6 +106,8 @@ typedef struct vdj_s {
     unsigned int        claiming:1;     // vdj_exec_discovery() is running: real players send no keepalive until the claim is done
     unsigned int        follow_master:1; // vdj should track master (in adj)
     vdj_progress_h      progress_h;     // optional, called by vdj_exec_discovery() before each claim packet
+    uint8_t             usb_loaded;     // 1: our status says a USB stick is mounted in the USB slot (we serve it); 0 = no stick (the default)
+    vdj_raw_update_h    raw_update_h;   // optional, see above
 } vdj_t;
 
 typedef struct  {
@@ -146,6 +153,14 @@ int vdj_close_sockets(vdj_t* v);
 void vdj_print_sockaddr(char* context, struct sockaddr_in* ip);
 
 // broadcast a single keepalive
+// A worker thread that is joined by its stop function. Internal, used by vdj.c and vdj_discovery.c.
+typedef struct {
+    pthread_t id;
+    int       on;
+} vdj_jthread_t;
+int  vdj_jthread_start(vdj_jthread_t* t, void* (*fn)(void*), void* arg);
+void vdj_jthread_join(vdj_jthread_t* t);
+
 int vdj_sendto_discovery_unicast(vdj_t* v, struct sockaddr_in* dest, unsigned char* packet, uint16_t packet_length);
 void vdj_send_keepalive(vdj_t* v);
 // unicast our status to all members

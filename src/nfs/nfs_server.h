@@ -23,6 +23,8 @@ typedef struct {
     int (*statfs)(void *ctx, fhandle_t *fh, uint32_t *tsize_out,
                   uint32_t *bsize_out, uint32_t *blocks_out,
                   uint32_t *bfree_out, uint32_t *bavail_out);
+    /* optional: a call for a procedure that is not served (write procedures, unknown numbers), for logging */
+    void (*unserved)(void *ctx, uint32_t program, uint32_t proc);
 } nfs_ops_t;
 
 typedef struct {

@@ -281,6 +281,8 @@ test: check-fixtures
 	$(CC) -Wall -Wno-unused-variable -Isrc/c -c src/test/test_libcdj.c -o target/test_libcdj.o
 	$(CC) -Wall -Isrc/c -o target/libcdj_test target/test_libcdj.o target/cdj.o
 	target/libcdj_test
+	$(MAKE) vdj-cycle-test
+	$(MAKE) nfsd-test
 	sniprun src/test/libcdj_pkts_test.c.snip
 	sniprun src/test/bpm_madness_test.c.snip
 	sniprun src/test/time_diff_test.c.snip
@@ -291,6 +293,23 @@ test: check-fixtures
 	sniprun src/test/anlz_waveform_test.c.snip
 	sniprun src/test/anlz_track_test.c.snip
 	sniprun src/test/anlz_robust_test.c.snip
+
+CYCLE_SRC = src/c/cdj.c src/c/vdj_store.c src/c/vdj_net.c src/c/vdj_beatout.c src/c/vdj_master.c src/c/vdj_discovery.c \
+            src/c/vdj_pselect.c src/c/vdj_simple.c src/c/vdj.c src/nfs/utf16.c src/nfs/pdb.c src/anlz/anlz.c
+
+NFSD_SRC = src/nfs/xdr.c src/nfs/rpc.c src/nfs/utf16.c src/nfs/portmap_client.c src/nfs/mount_client.c src/nfs/nfs_client.c src/nfs/nfs_server.c \
+           src/nfs/mount_server.c src/nfs/nfs_dirfs.c src/nfs/portmap_server.c src/nfs/nfsd.c
+
+# the NFS file service (portmap + mountd + NFS v2) end to end on 127.0.0.1, under AddressSanitizer
+nfsd-test: target
+	$(CC) -g -fsanitize=address -fno-omit-frame-pointer -Wall -Werror -Isrc/nfs -o target/nfsd_test src/test/nfsd_test.c $(NFSD_SRC) -lpthread
+	ASAN_OPTIONS=detect_leaks=1 target/nfsd_test
+
+# connect/disconnect with all threads running, on the loopback interface, under AddressSanitizer
+vdj-cycle-test: target
+	$(CC) -g -fsanitize=address -fno-omit-frame-pointer -Wall -Isrc/c -Isrc/nfs -Isrc/anlz -o target/vdj_cycle_test \
+	    src/test/vdj_cycle_test.c $(CYCLE_SRC) -lpthread
+	ASAN_OPTIONS=detect_leaks=0 target/vdj_cycle_test lo 3
 
 clean:
 	rm -rf target/

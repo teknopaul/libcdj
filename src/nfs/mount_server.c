@@ -43,31 +43,21 @@ static int encode_proc_unavail(xdr_t *tx, uint32_t xid) {
     return 0;
 }
 
-static int handle_export(xdr_t *tx, nfs_ops_t *ops, void *ctx) {
-    export_entry_t *list = NULL;
-    if (!ops->list_exports || ops->list_exports(ctx, &list) < 0) {
-        /* encode empty list */
-        uint32_t absent = 0;
-        return xdr_uint32(tx, &absent);
-    }
-
+static int handle_export(xdr_t *tx, export_entry_t *list) {
     for (export_entry_t *e = list; e; e = e->next) {
         uint32_t present = 1;
-        if (xdr_uint32(tx, &present) < 0) goto fail;
-        if (xdr_dirpath(tx, &e->filesystem) < 0) goto fail;
+        if (xdr_uint32(tx, &present) < 0) return -1;
+        if (xdr_dirpath(tx, &e->filesystem) < 0) return -1;
+        if (e->group.len) {                                /* groups: one node, then the end of the groups list */
+            uint32_t one = 1;
+            if (xdr_uint32(tx, &one) < 0) return -1;
+            if (xdr_dirpath(tx, &e->group) < 0) return -1;
+        }
         uint32_t no_groups = 0;
-        if (xdr_uint32(tx, &no_groups) < 0) goto fail;
+        if (xdr_uint32(tx, &no_groups) < 0) return -1;
     }
-    {
-        uint32_t end = 0;
-        if (xdr_uint32(tx, &end) < 0) goto fail;
-    }
-    mount_export_free(list);
-    return 0;
-
-fail:
-    mount_export_free(list);
-    return -1;
+    uint32_t end = 0;
+    return xdr_uint32(tx, &end);
 }
 
 static int handle_mnt(xdr_t *rx, xdr_t *tx, nfs_ops_t *ops, void *ctx) {
@@ -100,9 +90,15 @@ int mount_server_dispatch(xdr_t *rx, xdr_t *tx,
         if (encode_reply_ok(tx, xid) < 0) return -1;
         return handle_mnt(rx, tx, ops, ctx);
 
-    case MOUNTPROC_EXPORT:
-        if (encode_reply_ok(tx, xid) < 0) return -1;
-        return handle_export(tx, ops, ctx);
+    case MOUNTPROC_EXPORT: {
+        export_entry_t *list = NULL;
+        int rc = ops->list_exports ? ops->list_exports(ctx, &list) : -1;
+        if (rc == -2) { mount_export_free(list); return encode_proc_unavail(tx, xid); }   /* "no such procedure" */
+        if (rc < 0) list = NULL;                                                            /* any other failure: an empty list */
+        int r = encode_reply_ok(tx, xid) < 0 ? -1 : handle_export(tx, list);
+        mount_export_free(list);
+        return r;
+    }
 
     default:
         return encode_proc_unavail(tx, xid);
