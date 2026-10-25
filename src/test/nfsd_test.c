@@ -26,11 +26,13 @@ static int failures;
 
 static int logged;
 static char last_mount_line[256];
+static char last_umnt_line[256];
 static void on_log(void *ctx, const char *line)
 {
     (void)ctx;
     logged++;
     if (strstr(line, "MNT")) snprintf(last_mount_line, sizeof last_mount_line, "%s", line);
+    if (strstr(line, "UMNT")) snprintf(last_umnt_line, sizeof last_umnt_line, "%s", line);
 }
 
 typedef struct { uint32_t prog, vers; } gp_t;
@@ -39,6 +41,7 @@ static int enc_getport(xdr_t *x, void *a)
     gp_t *g = a; uint32_t proto = 17, port = 0;
     return xdr_uint32(x, &g->prog) | xdr_uint32(x, &g->vers) | xdr_uint32(x, &proto) | xdr_uint32(x, &port);
 }
+static int enc_path(xdr_t *x, void *a) { return xdr_dirpath(x, (dirpath_t *)a); }
 static int dec_u32(xdr_t *x, void *r) { return xdr_uint32(x, (uint32_t *)r); }
 
 static uint32_t getport(uint32_t prog, uint32_t vers)
@@ -128,6 +131,13 @@ int main(void)
     utf8_to_utf16le("/X/", path, sizeof path, &plen); dp.len = plen;
     CHECK(mount_mnt(&mc, &dp, &fhs2) == 0 && fhs2.status != 0, "MNT /X/ is refused");
     CHECK(strstr(last_mount_line, "refused") != NULL, "the refusal is logged");
+
+    /* UMNT (3): the players send it when the slot goes to "removable"; the answer must be an empty success, not "procedure unavailable" */
+    utf8_to_utf16le("/C/", path, sizeof path, &plen); dp.len = plen;
+    CHECK(rpc_call(&mc, 3, enc_path, &dp, NULL, NULL) == 0, "UMNT /C/ is answered with success");
+    CHECK(strstr(last_umnt_line, "/C/") != NULL, "the unmount is logged");
+    CHECK(rpc_call(&mc, 4, NULL, NULL, NULL, NULL) == 0, "UMNTALL is answered with success");
+    CHECK(mount_mnt(&mc, &dp, &fhs2) == 0 && fhs2.status == 0, "MNT /C/ works again after the UMNT");
 
     /* lookups, the way the players do them: from the root, other case */
     fhandle_t f1, f2, f3, f4, dummy;

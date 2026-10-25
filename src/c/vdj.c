@@ -306,6 +306,13 @@ vdj_send_keepalive(vdj_t* v)
 }
 
 
+void
+vdj_set_usb_slot(vdj_t* v, uint8_t state, int media_present)
+{
+    v->usb_state = state;
+    v->usb_no_media = media_present ? 0 : 1;
+}
+
 int
 vdj_send_status(vdj_t* v)
 {
@@ -323,8 +330,12 @@ vdj_send_status(vdj_t* v)
         if (v->usb_loaded && length > 0x74) {
             // What a real player sends with a stick mounted (captures prolink-w-tcp, prolink-deck-to-deck-transfer): the USB slot state
             // 0x6f is 00 instead of 04 (no stick), 0x74 is 01, and 0x6a flips between 04 and 06 about every half second (the activity light).
-            pkt[0x6f] = 0x00;
-            pkt[0x74] = 0x01;
+            // Stick present flags: 0x74 and 0x77 both follow the stick. prolink-usb-change.pcap (XDJ-700 owner) moves 0x74 01 -> 00 with 0x6f = 04 and
+            // back to 01 about 0.3 s before 0x6f = 00, with 0x77 staying 01; prolink-usb-extracts.pcap (the other deck as owner) moves 0x77 and leaves 0x74.
+            // Which one a deck reads depends on the model, so drive both.
+            pkt[0x74] = v->usb_no_media ? 0x00 : 0x01;
+            pkt[0x6f] = v->usb_state;
+            pkt[0x77] = v->usb_no_media ? 0x00 : 0x01;
             pkt[0x6a] = ((v->status_counter / 3) & 1) ? 0x06 : 0x04;
         }
 

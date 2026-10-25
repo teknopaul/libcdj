@@ -25,6 +25,8 @@ typedef struct {
                   uint32_t *bfree_out, uint32_t *bavail_out);
     /* optional: a call for a procedure that is not served (write procedures, unknown numbers), for logging */
     void (*unserved)(void *ctx, uint32_t program, uint32_t proc);
+    /* optional: a player unmounted (MOUNTPROC_UMNT with the path, or UMNTALL with path NULL), for logging. The reply is always success. */
+    void (*unmount)(void *ctx, dirpath_t *path);
 } nfs_ops_t;
 
 typedef struct {

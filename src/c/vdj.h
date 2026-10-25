@@ -107,6 +107,8 @@ typedef struct vdj_s {
     unsigned int        follow_master:1; // vdj should track master (in adj)
     vdj_progress_h      progress_h;     // optional, called by vdj_exec_discovery() before each claim packet
     uint8_t             usb_loaded;     // 1: our status says a USB stick is mounted in the USB slot (we serve it); 0 = no stick (the default)
+    uint8_t             usb_state;      // with usb_loaded: the USB slot state byte 0x6f, VDJ_USB_* below (0 = ready, the default); see vdj_set_usb_slot()
+    uint8_t             usb_no_media;   // with usb_loaded: 1 clears the media-present byte 0x77 (stick pulled), 0 sets it (the default)
     vdj_raw_update_h    raw_update_h;   // optional, see above
 } vdj_t;
 
@@ -165,6 +167,16 @@ int vdj_sendto_discovery_unicast(vdj_t* v, struct sockaddr_in* dest, unsigned ch
 void vdj_send_keepalive(vdj_t* v);
 // unicast our status to all members
 int vdj_send_status(vdj_t* v);
+
+// USB slot state we report in our status packets (byte 0x6f), as seen from a real player pressing USB STOP and swapping sticks
+// (references vdj-ui pcaps/prolink-usb-extracts.pcap):
+#define VDJ_USB_READY      0x00     // stick mounted and usable
+#define VDJ_USB_UNLOADING  0x02     // USB STOP pressed; a refused STOP goes back to READY after about a second
+#define VDJ_USB_REMOVABLE  0x03     // unmounted, safe to pull (about 1.5 s after UNLOADING)
+#define VDJ_USB_EMPTY      0x04     // no stick
+// Only has an effect while usb_loaded is set. media_present is byte 0x77: 1 while a stick is in the slot, 0 from "removable"
+// until a new one is inserted (a real player raises it about a second before going to READY). Safe to call from any thread.
+void vdj_set_usb_slot(vdj_t* v, uint8_t state, int media_present);
 // broadcast a beat, 
 // bpm does not have to be correct but its rendered on the CDJ so if bpm is not what is reported
 // the DJ will not know

@@ -999,7 +999,9 @@ cdj_create_keepalive_packet(uint16_t* length, unsigned char model, uint8_t* ip, 
         cdj_set_uint16(packet + 0x20, CDJ_DISCOVERY_VERSION);
         cdj_set_uint16(packet + 0x22, *length);
         packet[0x24] = player_id;
-        packet[0x25] = 0x02;
+        // Both XDJ-700 send 0x01 here (prolink-vdj-ui-broken-usb-change.pcap); 0x02 is what we have always sent. The decks seem to take 0x02 for a computer
+        // (they ask it for its portmapper at 50111) and then ignore its USB slot state (no mountd UMNT at 0x6f = 03), so XDJ mode sends the player value.
+        packet[0x25] = model == CDJ_XDJ ? 0x01 : 0x02;
         memcpy(packet + 0x26, mac, 6);
         memcpy(packet + 0x2c, ip, 4);
         packet[0x30] = member_count;
@@ -1103,15 +1105,23 @@ cdj_create_status_packet(uint16_t* length, unsigned char model, uint8_t player_i
     float bpm, uint8_t bar_index, uint8_t active, uint8_t master, int8_t new_master, uint32_t sync_counter,
     uint32_t n)
 {
-    *length = 0xd4;
+    // An XDJ sends 0x11c bytes (prolink-vdj-single-usb-eject.pcap, both XDJ-700), the CDJ-1000 style packet is 0xd4. The decks react to a stick
+    // going away (mountd UMNT on 0x6f = 03) only for players that look like their own kind, so in XDJ mode the shape follows the real one.
+    const int xdj = model == CDJ_XDJ;
+    *length = xdj ? 0x11c : 0xd4;
     uint8_t* packet = (uint8_t*) calloc(1, *length);
     if (packet) {
         cdj_set_header(packet, CDJ_STATUS);
         cdj_set_model_name(packet + cdj_header_len(CDJ_UPDATE_PORT, CDJ_STATUS), model);
         packet[0x1f] = 0x01;  // major
-        packet[0x20] = 0x03;  // minor (xdj700 sends 4)
+        packet[0x20] = xdj ? 0x04 : 0x03;  // minor (xdj700 sends 4)
         packet[0x21] = player_id;
-        cdj_set_uint16(packet + 0x22, 0xd4 - 36); // random length-36 but that is what the pioneers do
+        cdj_set_uint16(packet + 0x22, *length - 36); // random length-36 but that is what the pioneers do
+        if (xdj) {
+            // the tail beyond 0xd4 as both XDJ-700 send it (the last 8 bytes vary, left 0)
+            packet[0xd7] = packet[0xd8] = packet[0xd9] = packet[0xda] = packet[0xdb] = 0x01;
+            packet[0x113] = 0x05;
+        }
         packet[0x24] = player_id;
         packet[0x25] = 0x00;
         packet[0x26] = 0x00;       // unknown

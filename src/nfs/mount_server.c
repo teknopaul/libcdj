@@ -7,6 +7,8 @@
 /* Mount procedure numbers */
 #define MOUNTPROC_NULL    0
 #define MOUNTPROC_MNT     1
+#define MOUNTPROC_UMNT    3
+#define MOUNTPROC_UMNTALL 4
 #define MOUNTPROC_EXPORT  5
 
 /* RPC accept_stat */
@@ -89,6 +91,19 @@ int mount_server_dispatch(xdr_t *rx, xdr_t *tx,
     case MOUNTPROC_MNT:
         if (encode_reply_ok(tx, xid) < 0) return -1;
         return handle_mnt(rx, tx, ops, ctx);
+
+    case MOUNTPROC_UMNT: {
+        /* A player unmounts when it sees our USB slot go to "removable" (prolink-usb-change.pcap: the XDJ-700 answers with an empty success).
+         * Answering "procedure unavailable" tells it the unmount failed, and it then never mounts the slot again. */
+        dirpath_t dp = {0};
+        int have = xdr_dirpath(rx, &dp) == 0;
+        if (ops->unmount) ops->unmount(ctx, have ? &dp : NULL);
+        return encode_reply_ok(tx, xid);
+    }
+
+    case MOUNTPROC_UMNTALL:
+        if (ops->unmount) ops->unmount(ctx, NULL);
+        return encode_reply_ok(tx, xid);
 
     case MOUNTPROC_EXPORT: {
         export_entry_t *list = NULL;

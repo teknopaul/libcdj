@@ -68,6 +68,15 @@ static int w_mount(void *ctx, dirpath_t *path, fhandle_t *fh)
     return r;
 }
 
+static void w_unmount(void *ctx, dirpath_t *path)
+{
+    struct nfsd *d = ctx;
+    char p[MNTPATHLEN * 3];
+    if (!path) snprintf(p, sizeof p, "(all)");
+    else if (utf16le_decode(path->val, path->len, p, sizeof p) < 0) snprintf(p, sizeof p, "?");
+    say(d, "mountd UMNT \"%s\" -> ok", p);
+}
+
 static int w_getattr(void *ctx, fhandle_t *fh, fattr_t *a)
 {
     struct nfsd *d = ctx;
@@ -170,7 +179,7 @@ nfsd_t *nfsd_start(const nfsd_config_t *cfg, char *err, int errlen)
     if (!d->fs) { append_err(err, errlen, "cannot serve that directory"); free(d); return NULL; }
 
     nfs_dirfs_set_export_style(d->fs, cfg->export_style);
-    d->ops.list_exports = w_list_exports; d->ops.mount = w_mount; d->ops.getattr = w_getattr; d->ops.lookup = w_lookup;
+    d->ops.list_exports = w_list_exports; d->ops.mount = w_mount; d->ops.unmount = w_unmount; d->ops.getattr = w_getattr; d->ops.lookup = w_lookup;
     d->ops.unserved = w_unserved; d->ops.readdir = w_readdir; d->ops.read = w_read; d->ops.statfs = w_statfs;
     if (nfs_server_init(&d->srv, mport, nport, &d->ops, d) < 0) {
         char m[96];
