@@ -1025,10 +1025,10 @@ vdj_handle_managed_beat_unicast_datagram(vdj_t* v, vdj_beat_unicast_ph beat_unic
                 // seems this may be ignored and following status packets are used instead
                 if (cdj_beat_master_ok(b_pkt)) {
                     //fprintf(stderr, "master handoff OK\n");
-                    cdj_fprint_packet(stderr, packet, length, CDJ_BEAT_PORT);
+                    //cdj_fprint_packet(stderr, packet, length, CDJ_BEAT_PORT);
                 } else {
                     //fprintf(stderr, "error: master handoff failed\n");
-                    cdj_fprint_packet(stderr, packet, length, CDJ_BEAT_PORT);
+                    //cdj_fprint_packet(stderr, packet, length, CDJ_BEAT_PORT);
                 }
 
                 // optionally chain the handler

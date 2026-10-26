@@ -59,7 +59,7 @@ vdj_request_master(vdj_t* v)
                     vdj_sendto_update(v, dest, pkt, length);
                     free(dest);
                     //fprintf(stderr, "\nsent update to %i \n\n", master_id);
-                    cdj_fprint_packet(stderr, pkt, length, 50001);
+                    //cdj_fprint_packet(stderr, pkt, length, 50001);
                 }
             }
             free(pkt);
