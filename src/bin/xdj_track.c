@@ -61,6 +61,17 @@ static void summary(const anlz_track_t *t)
         if (anlz_track_waveform(t, W[i].k, &w) == ANLZ_OK) printf(" %s(%u)", W[i].name, w.count);
     }
     printf("\n");
+
+    anlz_phrases_t ph;
+    if (anlz_track_phrases(t, &ph) == ANLZ_OK) {
+        static const char *const MOOD[] = { "?", "high", "mid", "low" };
+        printf("phrases:   %u, mood %s, bank %s, ends at beat %u%s\n", ph.count, MOOD[ph.mood & 3], anlz_bank_name(ph.bank), ph.end_beat,
+               ph.damaged ? " (damaged list)" : "");
+        for (uint32_t i = 0; i < ph.count; i++)
+            printf("  %2u  beat %4u  %s%s\n", ph.phrases[i].index, ph.phrases[i].beat, anlz_phrase_name(ph.mood, ph.phrases[i].kind),
+                   ph.phrases[i].fill ? "  (fill from beat)" : "");
+    }
+    anlz_phrases_free(&ph);
 }
 
 typedef struct {

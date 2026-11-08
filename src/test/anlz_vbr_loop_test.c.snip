@@ -1,0 +1,62 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stdint.h>
+
+#include "../nfs/utf16.h"
+#include "../anlz/anlz.h"
+#include "../anlz/anlz_fake.h"
+
+//SNIP_FILE SNIP_utf16      ../nfs/utf16.c
+//SNIP_FILE SNIP_anlz_core  ../anlz/anlz.c
+//SNIP_FILE SNIP_fake_anlz  ../anlz/anlz_fake.c
+
+#include "snip_core.h"
+
+/* The analysis files a deck wrote for a VBR mp3 after two loops were made on it (fixtures/anlz-deck-vbr/MANIFEST.text). */
+#define FIX "fixtures/anlz-deck-vbr/P069_000161A1_ANLZ0000."
+
+static void test_deck_vbr_loops(void)
+{
+    anlz_t *dat = NULL, *ext = NULL;
+    anlz_cue_list_t l;
+    if (!snip_equals("dat opens", ANLZ_OK, anlz_open_file(FIX "DAT", &dat))) return;
+    if (!snip_equals("ext opens", ANLZ_OK, anlz_open_file(FIX "EXT", &ext))) { anlz_close(dat); return; }
+
+    snip_equals("pcob", ANLZ_OK, anlz_cues_from(dat, ANLZ_CUES_HOT, 0, &l));
+    snip_equals("3 hot cues", 3, (int)l.count);
+    if (l.count == 3) {
+        const anlz_cue_t *a = &l.cues[0], *b = &l.cues[1], *c = &l.cues[2];
+        snip_assert("A is a plain cue", a->hot_cue == 1 && !a->is_loop && a->time_ms == 20810 && !a->has_seek);
+        snip_assert("B is a loop", b->hot_cue == 2 && b->is_loop && b->time_ms == 25425 && b->loop_time_ms == 30041);
+        snip_assert("B seek", b->has_seek && b->seek_frame75 == 0x772 && b->seek_end_frame75 == 0x8cd);
+        snip_assert("B bytes", b->seek_byte == 0xd4160 && b->seek_end_byte == 0xfc480);
+        snip_assert("C is a loop", c->hot_cue == 3 && c->is_loop && c->time_ms == 32348 && c->loop_time_ms == 36964);
+        snip_assert("C seek", c->has_seek && c->seek_frame75 == 0x97a && c->seek_end_frame75 == 0xad4);
+        snip_assert("C bytes", c->seek_byte == 0x1106a0 && c->seek_end_byte == 0x139860);
+    }
+    anlz_cue_list_free(&l);
+
+    /* the PCP2 copy has the loop and its length in beats, but no byte offsets */
+    snip_equals("pco2", ANLZ_OK, anlz_cues_from(ext, ANLZ_CUES_HOT, 1, &l));
+    snip_equals("3 hot cues in pco2", 3, (int)l.count);
+    if (l.count == 3) {
+        snip_assert("pco2 loop B", l.cues[1].is_loop && l.cues[1].loop_time_ms == 30041 && l.cues[1].loop_num == 8 && l.cues[1].loop_den == 1);
+        snip_assert("pco2 has no seek", !l.cues[1].has_seek);
+    }
+    anlz_cue_list_free(&l);
+    anlz_close(dat);
+    anlz_close(ext);
+}
+
+int main(int argc, char *argv[])
+{
+    (void)argc; (void)argv;
+    test_deck_vbr_loops();
+    if (errors) {
+        fprintf(stdout, "[fail] %d error(s)\n", errors);
+        return 1;
+    }
+    fprintf(stdout, "[pass] anlz_vbr_loop_test\n");
+    return 0;
+}

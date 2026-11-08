@@ -113,6 +113,53 @@ static void test_pqtz_synthetic(void)
     free(buf);
 }
 
+static void test_pqtz_shift(void)
+{
+    const fb_t beats[3] = { {1, 12000, 29}, {2, 12000, 529}, {3, 12000, 1029} };
+    uint8_t *buf;
+    anlz_beat_t x;
+    anlz_beatgrid_t g;
+
+    /* +414: a grid start moved from 29 ms to 443 ms on a deck; every beat moves, the fractions are dropped */
+    anlz_fake_t *b = anlz_fake_begin();
+    anlz_fake_set_pqtz_shift(b, 414);
+    anlz_fake_add_pqtz(b, beats, 3, 3);
+    anlz_t *a = open_fake(b, &buf);
+    snip_equals("shift: ok", ANLZ_OK, anlz_beatgrid(a, &g));
+    snip_equals("shift: value", 414, (int)g.shift_ms);
+    snip_assert("shift: beat 0", anlz_beat_at(&g, 0, &x) && x.time_ms == 443 && x.time_signed_ms == 443 && x.beat_number == 1);
+    snip_assert("shift: beat 2", anlz_beat_at(&g, 2, &x) && x.time_ms == 1443);
+    snip_equals("shift: for_time before", -1, anlz_beat_for_time(&g, 442));
+    snip_equals("shift: for_time on", 0, anlz_beat_for_time(&g, 443));
+    snip_assert("shift: monotonic", g.monotonic);
+    snip_assert("shift: avg bpm unchanged", fabs(anlz_avg_bpm(&g) - 120.0) < 1e-9);
+    anlz_close(a);
+    free(buf);
+
+    /* negative (two's complement): 0xff1a = -230 as seen in two real sticks */
+    b = anlz_fake_begin();
+    anlz_fake_set_pqtz_shift(b, -230);
+    anlz_fake_add_pqtz(b, beats, 3, 3);
+    a = open_fake(b, &buf);
+    snip_equals("shift: negative ok", ANLZ_OK, anlz_beatgrid(a, &g));
+    snip_equals("shift: negative value", -230, (int)g.shift_ms);
+    snip_assert("shift: negative clamps at 0", anlz_beat_at(&g, 0, &x) && x.time_ms == 0 && x.time_signed_ms == -201);
+    snip_assert("shift: signed times are exact", anlz_beat_at(&g, 2, &x) && x.time_signed_ms == 799 && x.time_ms == 799);
+    snip_assert("shift: avg bpm uses the unclamped times", fabs(anlz_avg_bpm(&g) - 120.0) < 1e-9);
+    snip_assert("shift: negative beat 1", anlz_beat_at(&g, 1, &x) && x.time_ms == 299);
+    anlz_close(a);
+    free(buf);
+
+    /* no shift: untouched, fractions kept */
+    b = anlz_fake_begin();
+    anlz_fake_add_pqtz(b, beats, 3, 3);
+    a = open_fake(b, &buf);
+    snip_equals("shift: none", 0, anlz_beatgrid(a, &g) == ANLZ_OK ? (int)g.shift_ms : -1);
+    snip_assert("shift: none beat 0", anlz_beat_at(&g, 0, &x) && x.time_ms == 29);
+    anlz_close(a);
+    free(buf);
+}
+
 static void test_pqtz_edge_cases(void)
 {
     uint8_t *buf;
@@ -293,10 +340,11 @@ typedef struct {
     const char *path;
     uint32_t count, first_ms, last_ms;
     uint16_t last_number;
+    int shift_ms;           /* PQTZ header grid shift; first_ms/last_ms are the unshifted entries */
 } fixture_t;
 
 static const fixture_t FX[] = {
-    { "P014_00001A7A", "P014/00001A7A", "/Contents/Vladimir Dubyshkin/ivanovo night luxe/nothingburger_(Original_Mix).mp3", 390, 236, 155836, 2 },
+    { "P014_00001A7A", "P014/00001A7A", "/Contents/Vladimir Dubyshkin/ivanovo night luxe/nothingburger_(Original_Mix).mp3", 390, 236, 155836, 2, -230 },
     { "P024_00023562", "P024/00023562", "/Contents/Josh Coakley/The Drums/The_Drums.mp3", 677, 28, 327124, 1 },
     { "P02A_0000ECBE", "P02A/0000ECBE", "/Contents/UnknownArtist/UnknownAlbum/10SecSilence.mp3", 0, 0, 0, 0 },
     { "P035_0002765B", "P035/0002765B", "/Contents/Ku De Ta, Nikki Amber/Just Be Good To Me/Just_Be_Good_To_Me_FooR_Remix.mp3", 552, 283, 254592, 4 },
@@ -353,10 +401,12 @@ static void check_fixture(const fixture_t *f)
         return;
     }
 
+    snprintf(name, sizeof name, "%s grid shift", f->file);
+    snip_equals(name, f->shift_ms, (int)g.shift_ms);
     snprintf(name, sizeof name, "%s first beat", f->file);
-    snip_assert(name, anlz_beat_at(&g, 0, &x) && x.beat_number == 1 && x.time_ms == f->first_ms && x.bpm_x100 == bpm);
+    snip_assert(name, anlz_beat_at(&g, 0, &x) && x.beat_number == 1 && x.time_ms == f->first_ms + f->shift_ms && x.bpm_x100 == bpm);
     snprintf(name, sizeof name, "%s last beat", f->file);
-    snip_assert(name, anlz_beat_at(&g, g.count - 1, &x) && x.time_ms == f->last_ms && x.beat_number == f->last_number);
+    snip_assert(name, anlz_beat_at(&g, g.count - 1, &x) && x.time_ms == f->last_ms + f->shift_ms && x.beat_number == f->last_number);
     snprintf(name, sizeof name, "%s bar numbering and tempo", f->file);
     int cycle = 1;
     for (uint32_t i = 0; i < g.count; i++) {
@@ -382,7 +432,8 @@ static void check_fixture(const fixture_t *f)
     for (uint32_t i = 0; i < g.count; i++) {
         anlz_beat_at(&g, i, &x);
         anlz_beat_at(&g2, i, &y);
-        uint32_t d = x.time_ms > y.time_ms ? x.time_ms - y.time_ms : y.time_ms - x.time_ms;
+        uint32_t xt = x.time_ms - f->shift_ms;       /* the PQT2 line is the unshifted grid */
+        uint32_t d = xt > y.time_ms ? xt - y.time_ms : y.time_ms - xt;
         if (d > worst) worst = d;
         if (d > 1 || x.beat_number != y.beat_number || x.bpm_x100 != y.bpm_x100) ok = 0;
     }
@@ -393,6 +444,7 @@ static void check_fixture(const fixture_t *f)
     snprintf(name, sizeof name, "%s attach", f->file);
     snip_equals(name, ANLZ_OK, anlz_beatgrid_attach_sub_ms(&g, ext));
     int agree = 1;
+    g.shift_ms = 0;                                  /* compare the raw entries with the line */
     for (uint32_t i = 0; i < g.count; i++) {
         anlz_beat_at(&g, i, &x);
         int64_t ex = (int64_t)x.time_ms * 1000 + x.sub_ms_us;
@@ -435,6 +487,7 @@ int main(int argc, char *argv[])
 
     test_path_synthetic();
     test_pqtz_synthetic();
+    test_pqtz_shift();
     test_pqtz_edge_cases();
     test_pqt2_synthetic();
     test_attach_sub_ms();

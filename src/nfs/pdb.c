@@ -25,6 +25,7 @@ static uint32_t ru32(const uint8_t *p)
  * Three wire encodings:
  *   0x40  long ASCII:    [0x40][u16le total][0x00][ASCII bytes]
  *   0x90  long UTF-16LE: [0x90][u16le total][0x00][UTF-16LE bytes]
+ *   0x90  ISRC:          [0x90][u16le total][0x00][0x03][ASCII code][0x00]   (rekordbox's odd form for a track's ISRC)
  *   odd   short ASCII:   [kind] where text_len = (kind>>1) - 1
  */
 static char *devicesql_to_utf8(const uint8_t *ptr, uint32_t avail)
@@ -50,6 +51,17 @@ static char *devicesql_to_utf8(const uint8_t *ptr, uint32_t avail)
         if (total < 4 || (uint32_t)total > avail) return NULL;
         int blen = total - 4;
         if (blen <= 0) return NULL;
+        if (blen >= 3 && ptr[4] == 0x03 && ptr[4 + blen - 1] == 0) {         /* ISRC: printable ASCII between the 0x03 and the NUL */
+            int ok = 1;
+            for (int i = 1; ok && i < blen - 1; i++) ok = ptr[4 + i] >= 0x20 && ptr[4 + i] < 0x7f;
+            if (ok) {
+                char *s = malloc((size_t)blen - 1);
+                if (!s) return NULL;
+                memcpy(s, ptr + 5, (size_t)blen - 2);
+                s[blen - 2] = '\0';
+                return s;
+            }
+        }
         /* UTF-16LE → UTF-8: worst case 3× expansion */
         char *s = malloc((size_t)blen * 3 + 1);
         if (!s) return NULL;

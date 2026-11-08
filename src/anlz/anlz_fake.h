@@ -22,6 +22,8 @@ void anlz_fake_add_ppth(anlz_fake_t *b, const char *utf8_path);
 typedef struct { uint16_t number; uint16_t bpm_x100; uint32_t time_ms; } anlz_fake_beat_t;
 /* PQTZ with n beats; len_beats_field is written as given (pass n for a normal file). */
 void anlz_fake_add_pqtz(anlz_fake_t *b, const anlz_fake_beat_t *beats, uint32_t n, uint32_t len_beats_field);
+/* Sets the PQTZ header grid shift (0x12, signed ms) of the next anlz_fake_add_pqtz() call. */
+void anlz_fake_set_pqtz_shift(anlz_fake_t *b, int16_t shift_ms);
 /* PQT2: header anchors from first/last, count field `count_field`, then n 16-bit fractions (microseconds). */
 void anlz_fake_add_pqt2(anlz_fake_t *b, anlz_fake_beat_t first, anlz_fake_beat_t last,
                         uint32_t count_field, const uint16_t *sub_us, uint32_t n);

@@ -75,8 +75,9 @@ typedef enum {
 typedef struct {
     uint16_t beat_number;   /* 1..4 within the bar */
     uint16_t bpm_x100;      /* tempo, BPM x 100 */
-    uint32_t time_ms;       /* at normal speed */
-    uint16_t sub_ms_us;     /* 0..999: microseconds after time_ms; 0 when no PQT2 data is available */
+    uint32_t time_ms;       /* at normal speed; includes the PQTZ grid shift, clamped at 0 */
+    int32_t  time_signed_ms;/* the same without the clamp: a shift can put the first beats of the grid before the start of the track (-1844 seen) */
+    uint16_t sub_ms_us;     /* 0..999: microseconds after time_ms; 0 when no PQT2 data is available or the grid is shifted */
 } anlz_beat_t;
 
 typedef struct {
@@ -91,6 +92,7 @@ typedef struct {
     uint32_t header_count;  /* PQT2 only: beat count stored in the header */
     uint16_t first_number, tempo;
     uint32_t first_ms, last_ms;
+    int16_t  shift_ms;      /* PQTZ only: grid shift from the tag header (0x12), already applied by anlz_beat_at() */
 } anlz_beatgrid_t;
 
 /* PQTZ when the file has one (even an empty one), otherwise PQT2, otherwise ANLZ_ERR_ABSENT. */
@@ -120,6 +122,11 @@ typedef struct {
     uint8_t  color_id;        /* PCP2 byte 0x1c */
     uint8_t  raw_1d[3];       /* PCP2 bytes 0x1d..0x1f; "03 00 xx" on cues that carry a colour; meaning unknown */
     uint8_t  has_rgb;         /* the 4 colour bytes after the comment are present */
+    /* PCPT only: the seek position of a cue on a variable bitrate mp3 (0x28..0x37 = two pairs: start and end in 1/75 s, start and end as byte offsets
+       into the file; the end halves are 0 for a plain cue). has_seek is set when the first word agrees with time_ms x 75 / 1000. */
+    uint8_t  has_seek;
+    uint32_t seek_frame75, seek_end_frame75;
+    uint32_t seek_byte, seek_end_byte;
     uint8_t  color_code, red, green, blue;
     char     comment[256];    /* UTF-8, "" when none (at most 85 UTF-16 units are kept) */
 } anlz_cue_t;
@@ -141,6 +148,13 @@ anlz_err_t anlz_cues(const anlz_t *a, anlz_cue_kind_t kind, anlz_cue_list_t *out
 anlz_err_t anlz_cues_from(const anlz_t *a, anlz_cue_kind_t kind, int use_pco2, anlz_cue_list_t *out);
 void       anlz_cue_list_free(anlz_cue_list_t *list);
 
+/* Hot cue colour index (anlz_cue_t.color_code) to the rekordbox palette colour: returns 1 and the colour in red, green and blue (any may be NULL) for
+ * 1..62, 0 for 0 (no colour) and for anything else. The RGB the file stores in the cue is what the LEDs of the player show; this is the colour of
+ * rekordbox's palette. */
+int anlz_cue_palette(uint8_t index, uint8_t *red, uint8_t *green, uint8_t *blue);
+/* Memory cue colour (anlz_cue_t.color_id): "None", "Pink", "Red", "Orange", "Yellow", "Green", "Aqua", "Blue", "Purple"; "?" for anything else. */
+const char *anlz_memory_color_name(uint8_t id);
+
 /* ---- waveforms (PWAV, PWV2 in .DAT; PWV3, PWV4, PWV5 in .EXT; PWV6, PWV7 in .2EX) ---- */
 
 typedef enum {
@@ -149,8 +163,8 @@ typedef enum {
     ANLZ_WAVE_DETAIL,             /* PWV3  .EXT  150 entries/s, encoded like PWAV */
     ANLZ_WAVE_COLOR_PREVIEW,      /* PWV4  .EXT  1200 columns, 6 bytes (layout only partly understood: raw) */
     ANLZ_WAVE_COLOR_DETAIL,       /* PWV5  .EXT  150 entries/s, 16 bit: red 3, green 3, blue 3, height 5 */
-    ANLZ_WAVE_3BAND_PREVIEW,      /* PWV6  .2EX  1200 columns, 3 bytes (mid, high, low); spec only, no sample */
-    ANLZ_WAVE_3BAND_DETAIL        /* PWV7  .2EX  150 entries/s, 3 bytes (mid, high, low); spec only, no sample */
+    ANLZ_WAVE_3BAND_PREVIEW,      /* PWV6  .2EX  1200 columns, 3 bytes (low, mid, high) */
+    ANLZ_WAVE_3BAND_DETAIL        /* PWV7  .2EX  150 entries/s, 3 bytes (low, mid, high) */
 } anlz_wave_kind_t;
 
 typedef struct {
@@ -177,6 +191,40 @@ int anlz_wave_column(const anlz_waveform_t *w, uint32_t index, anlz_wave_column_
  * track_ms (0 gives -1). Result is clamped to the last entry; -1 for an empty waveform. */
 int32_t anlz_wave_index_for_time(const anlz_waveform_t *w, uint32_t time_ms, uint32_t track_ms);
 
+/* PWVC (.2EX): the gains of the three bands (e.g. 145, 249, 500). ANLZ_ERR_ABSENT when there is no PWVC. */
+typedef struct { uint16_t low, mid, high; } anlz_wave_gains_t;
+anlz_err_t anlz_wave_gains(const anlz_t *a, anlz_wave_gains_t *out);
+
+/* ---- phrases (PSSI in .EXT, rekordbox 5+): intro, verse, chorus ... ---- */
+
+typedef struct {
+    uint16_t index;           /* 1.. */
+    uint16_t beat;            /* beat number where the phrase starts */
+    uint16_t kind;            /* meaning depends on the mood: anlz_phrase_name() */
+    uint8_t  k1, k2, k3;      /* numbered variants of a high-mood phrase */
+    uint8_t  b;               /* 1 when beat2..beat4 are used */
+    uint16_t beat2, beat3, beat4;
+    uint8_t  fill;            /* 1 when fill beats follow the phrase */
+    uint16_t beat_fill;       /* where the fill begins */
+} anlz_phrase_t;
+
+typedef struct {
+    uint16_t       mood;      /* 1 high, 2 mid, 3 low */
+    uint16_t       end_beat;  /* beat where the last phrase ends */
+    uint8_t        bank;      /* lighting bank: anlz_bank_name() */
+    int            encrypted; /* the tag was XOR masked (rekordbox 6+) */
+    uint32_t       count;
+    anlz_phrase_t *phrases;   /* malloc'd; release with anlz_phrases_free() */
+    int            damaged;   /* the tag claimed more phrases than it holds */
+} anlz_phrases_t;
+
+/* ANLZ_ERR_ABSENT when the file has no PSSI; ANLZ_ERR_BAD_LEN when the header or mood is invalid. */
+anlz_err_t anlz_phrases(const anlz_t *a, anlz_phrases_t *out);
+void       anlz_phrases_free(anlz_phrases_t *p);
+/* "Intro", "Verse 2", "Up", "Chorus" ...; "?" for a kind the mood does not define. */
+const char *anlz_phrase_name(uint16_t mood, uint16_t kind);
+const char *anlz_bank_name(uint8_t bank);
+
 /* ---- whole track: DAT + EXT + 2EX together ---- */
 
 typedef enum { ANLZ_FILE_DAT = 0, ANLZ_FILE_EXT = 1, ANLZ_FILE_2EX = 2 } anlz_file_t;
@@ -201,6 +249,8 @@ anlz_err_t anlz_track_beatgrid(const anlz_track_t *t, anlz_beatgrid_t *out);
 /* The .EXT PCO2 when there is one (complete: all hot cues, loop lengths, colours, comments); otherwise the .DAT
  * and .EXT PCOB lists merged without duplicates (a .DAT-only track has at most the first three hot cues). */
 anlz_err_t anlz_track_cues(const anlz_track_t *t, anlz_cue_kind_t kind, anlz_cue_list_t *out);
+/* Phrases from the .EXT; ANLZ_ERR_ABSENT when there is no .EXT or it has no PSSI. */
+anlz_err_t anlz_track_phrases(const anlz_track_t *t, anlz_phrases_t *out);
 /* Waveform from whichever file holds it: PWAV/PWV2 .DAT, PWV3/4/5 .EXT, PWV6/7 .2EX (PWV7 also tried in .EXT). */
 anlz_err_t anlz_track_waveform(const anlz_track_t *t, anlz_wave_kind_t kind, anlz_waveform_t *out);
 

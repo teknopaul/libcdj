@@ -421,6 +421,20 @@ static void test_fixtures(void)
     anlz_close(ext);
 }
 
+static void test_palette(void)
+{
+    uint8_t r = 9, g = 9, b = 9;
+    snip_assert("palette: 1 is #305aff", anlz_cue_palette(1, &r, &g, &b) && r == 0x30 && g == 0x5a && b == 0xff);
+    snip_assert("palette: 0x1c is #aad208", anlz_cue_palette(0x1c, &r, &g, &b) && r == 0xaa && g == 0xd2 && b == 0x08);
+    snip_assert("palette: 0x35 is #e600ff", anlz_cue_palette(0x35, &r, &g, &b) && r == 0xe6 && g == 0x00 && b == 0xff);
+    snip_assert("palette: 62 is #6473ff", anlz_cue_palette(62, &r, &g, &b) && r == 0x64 && g == 0x73 && b == 0xff);
+    snip_assert("palette: 0 has no colour", !anlz_cue_palette(0, &r, &g, &b) && r == 0x64);
+    snip_assert("palette: 63 is outside", !anlz_cue_palette(63, &r, &g, &b));
+    snip_assert("palette: NULL outputs are fine", anlz_cue_palette(5, NULL, NULL, NULL));
+    snip_assert("memory colour names", !strcmp(anlz_memory_color_name(0), "None") && !strcmp(anlz_memory_color_name(2), "Red")
+                && !strcmp(anlz_memory_color_name(8), "Purple") && !strcmp(anlz_memory_color_name(9), "?"));
+}
+
 int main(int argc, char *argv[])
 {
     (void)argc; (void)argv;
@@ -430,6 +444,7 @@ int main(int argc, char *argv[])
     test_pco2_wins_over_pcob();
     test_no_cue_tags();
     test_malformed();
+    test_palette();
     test_fixtures();
 
     if (errors) {

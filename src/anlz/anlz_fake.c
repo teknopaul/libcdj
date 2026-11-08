@@ -8,6 +8,7 @@ struct anlz_fake {
     uint8_t *buf;
     uint32_t len;
     uint32_t cap;
+    int16_t  pqtz_shift;
 };
 
 static void put32(uint8_t *p, uint32_t v)
@@ -95,12 +96,17 @@ static void put16(uint8_t *p, uint32_t v)
     p[0] = (uint8_t)(v >> 8); p[1] = (uint8_t)v;
 }
 
+void anlz_fake_set_pqtz_shift(anlz_fake_t *b, int16_t shift_ms)
+{
+    b->pqtz_shift = shift_ms;
+}
+
 void anlz_fake_add_pqtz(anlz_fake_t *b, const anlz_fake_beat_t *beats, uint32_t n, uint32_t len_beats_field)
 {
     uint32_t body_len = 12 + n * 8;                   /* from 0x0c: unk1, unk2, len_beats, entries */
     uint8_t *body = calloc(1, body_len ? body_len : 1);
     if (!body) return;
-    put32(body + 4, 0x00080000);                      /* unknown2, as seen in real files */
+    put32(body + 4, 0x00080000 | (uint16_t)b->pqtz_shift);   /* 0x00080000 as seen in real files; low half = grid shift */
     put32(body + 8, len_beats_field);
     for (uint32_t i = 0; i < n; i++) {
         uint8_t *e = body + 12 + i * 8;

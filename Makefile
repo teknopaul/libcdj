@@ -261,7 +261,7 @@ survey-tracks: target/xdj-track
 	target/xdj-track --check "$(dir $(patsubst %/,%,$(ANLZ_TEST_DIR)))"
 
 # The ANLZ tests again, compiled with AddressSanitizer and UBSan (any report fails the build).
-ANLZ_TESTS = anlz_container_test anlz_beatgrid_test anlz_cues_test anlz_waveform_test anlz_track_test anlz_robust_test
+ANLZ_TESTS = anlz_container_test anlz_beatgrid_test anlz_cues_test anlz_waveform_test anlz_track_test anlz_2ex_test anlz_vbr_loop_test anlz_robust_test
 test-asan: check-fixtures
 	@for t in $(ANLZ_TESTS); do \
 	  ( cd src/test && \
@@ -273,6 +273,8 @@ test-asan: check-fixtures
 # ANLZ fixtures must stay byte-for-byte copies of the real files.
 check-fixtures:
 	cd src/test/fixtures/anlz && sha256sum --quiet -c SHA256SUMS
+	cd src/test/fixtures/anlz-2ex && sha256sum --quiet -c SHA256SUMS
+	cd src/test/fixtures/anlz-deck-vbr && sha256sum --quiet -c SHA256SUMS
 
 check: test
 
@@ -292,6 +294,8 @@ test: check-fixtures
 	sniprun src/test/anlz_cues_test.c.snip
 	sniprun src/test/anlz_waveform_test.c.snip
 	sniprun src/test/anlz_track_test.c.snip
+	sniprun src/test/anlz_2ex_test.c.snip
+	sniprun src/test/anlz_vbr_loop_test.c.snip
 	sniprun src/test/anlz_robust_test.c.snip
 
 CYCLE_SRC = src/c/cdj.c src/c/vdj_store.c src/c/vdj_net.c src/c/vdj_beatout.c src/c/vdj_master.c src/c/vdj_discovery.c \

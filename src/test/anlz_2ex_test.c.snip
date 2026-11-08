@@ -1,0 +1,228 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stdint.h>
+
+#include "../nfs/utf16.h"
+#include "../anlz/anlz.h"
+#include "../anlz/anlz_fake.h"
+
+//SNIP_FILE SNIP_utf16      ../nfs/utf16.c
+//SNIP_FILE SNIP_anlz_core  ../anlz/anlz.c
+//SNIP_FILE SNIP_fake_anlz  ../anlz/anlz_fake.c
+
+#include "snip_core.h"
+
+/* Real .EXT / .2EX files of rekordcrate's test data (MPL-2.0, see fixtures/anlz-2ex/MANIFEST.text):
+ * a 20 kHz -> 20 Hz sweep played three times, and two tracks of rekordbox's demo export. */
+#define FIX "fixtures/anlz-2ex/"
+
+static const uint8_t KEY[19] = {
+    0xCB, 0xE1, 0xEE, 0xFA, 0xE5, 0xEE, 0xAD, 0xEE, 0xE9, 0xD2, 0xE9, 0xEB, 0xE1, 0xE9, 0xF3, 0xE8, 0xE9, 0xF4, 0xE1
+};
+
+typedef struct {
+    const char *name;
+    uint32_t pwv7_count;
+    uint16_t gains[3];
+    uint16_t mood, end_beat;
+    uint32_t phrases;
+    uint16_t first_kind, last_kind;
+} fx_t;
+
+static const fx_t FX[] = {
+    { "sweep",         22500, { 80, 88, 119 },   1, 257, 8,  1, 6 },
+    { "P016_0000875E", 25866, { 91, 138, 396 },  2, 353, 19, 9, 9 },
+    { "P053_0001D21F", 19208, { 145, 249, 500 }, 2, 257, 11, 1, 10 },
+};
+
+static void check_fixture(const fx_t *f)
+{
+    char name[160], path[256];
+    anlz_t *ex2 = NULL, *ext = NULL;
+    anlz_waveform_t w;
+    anlz_wave_gains_t g;
+    snprintf(path, sizeof path, FIX "%s_ANLZ0000.2EX", f->name);
+    snprintf(name, sizeof name, "%s 2EX opens", f->name);
+    if (!snip_equals(name, ANLZ_OK, anlz_open_file(path, &ex2))) return;
+    snprintf(path, sizeof path, FIX "%s_ANLZ0000.EXT", f->name);
+    snprintf(name, sizeof name, "%s EXT opens", f->name);
+    if (!snip_equals(name, ANLZ_OK, anlz_open_file(path, &ext))) { anlz_close(ex2); return; }
+
+    snprintf(name, sizeof name, "%s PWV6", f->name);
+    snip_equals(name, ANLZ_OK, anlz_waveform(ex2, ANLZ_WAVE_3BAND_PREVIEW, &w));
+    snip_equals(name, 1200, (int)w.count);
+    snip_assert(name, !w.clamped && w.entry_bytes == 3 && w.entries_per_sec == 0.0);
+    snprintf(name, sizeof name, "%s PWV7", f->name);
+    snip_equals(name, ANLZ_OK, anlz_waveform(ex2, ANLZ_WAVE_3BAND_DETAIL, &w));
+    snip_equals(name, (int)f->pwv7_count, (int)w.count);
+    snip_assert(name, !w.clamped && w.entries_per_sec == 150.0);
+    snprintf(name, sizeof name, "%s PWVC gains", f->name);
+    snip_equals(name, ANLZ_OK, anlz_wave_gains(ex2, &g));
+    snip_assert(name, g.low == f->gains[0] && g.mid == f->gains[1] && g.high == f->gains[2]);
+    snprintf(name, sizeof name, "%s EXT has no PWV6/PWVC", f->name);
+    snip_equals(name, ANLZ_ERR_ABSENT, anlz_waveform(ext, ANLZ_WAVE_3BAND_PREVIEW, &w));
+    snip_equals(name, ANLZ_ERR_ABSENT, anlz_wave_gains(ext, &g));
+
+    anlz_phrases_t p;
+    snprintf(name, sizeof name, "%s PSSI", f->name);
+    snip_equals(name, ANLZ_OK, anlz_phrases(ext, &p));
+    snip_assert(name, p.encrypted && !p.damaged && p.bank == 0);
+    snip_equals(name, f->mood, p.mood);
+    snip_equals(name, f->end_beat, p.end_beat);
+    snip_equals(name, (int)f->phrases, (int)p.count);
+    if (p.count == f->phrases) {
+        int ordered = 1;
+        for (uint32_t i = 0; i < p.count; i++) {
+            if (p.phrases[i].index != i + 1) ordered = 0;
+            if (i && p.phrases[i].beat <= p.phrases[i - 1].beat) ordered = 0;
+            if (!strcmp(anlz_phrase_name(p.mood, p.phrases[i].kind), "?")) ordered = 0;
+        }
+        snprintf(name, sizeof name, "%s phrases numbered 1.., beats ascend, kinds named", f->name);
+        snip_assert(name, ordered);
+        snprintf(name, sizeof name, "%s first and last kind", f->name);
+        snip_assert(name, p.phrases[0].kind == f->first_kind && p.phrases[p.count - 1].kind == f->last_kind);
+        snprintf(name, sizeof name, "%s last phrase starts before the end beat", f->name);
+        snip_assert(name, p.phrases[p.count - 1].beat < p.end_beat);
+    }
+    anlz_phrases_free(&p);
+    snip_equals(name, ANLZ_ERR_ABSENT, anlz_phrases(ex2, &p));
+
+    anlz_close(ex2);
+    anlz_close(ext);
+}
+
+/* the sweep goes 20 kHz -> 20 Hz and is played three times: within each pass the high band peaks first, the low band last */
+static void test_sweep_band_order(void)
+{
+    anlz_t *a = NULL;
+    anlz_waveform_t w;
+    anlz_wave_column_t c;
+    snip_equals("sweep opens", ANLZ_OK, anlz_open_file(FIX "sweep_ANLZ0000.2EX", &a));
+    snip_equals("sweep pwv6", ANLZ_OK, anlz_waveform(a, ANLZ_WAVE_3BAND_PREVIEW, &w));
+    for (int pass = 0; pass < 3; pass++) {
+        uint32_t peak[3] = { 0, 0, 0 }, best[3] = { 0, 0, 0 };
+        for (uint32_t i = 0; i < 400; i++) {
+            anlz_wave_column(&w, pass * 400 + i, &c);
+            uint8_t v[3] = { c.low, c.mid, c.high };
+            for (int b = 0; b < 3; b++) if (v[b] > best[b]) { best[b] = v[b]; peak[b] = i; }
+        }
+        char name[64];
+        snprintf(name, sizeof name, "sweep pass %d: high < mid < low peak", pass);
+        snip_assert(name, peak[2] < peak[1] && peak[1] < peak[0]);
+    }
+    anlz_close(a);
+}
+
+/* sweep, phrase 2: an "Up" with beats 35/51/59 and k2 = 1; phrase 5 has fill beats from beat 127 */
+static void test_sweep_phrase_details(void)
+{
+    anlz_t *a = NULL;
+    anlz_phrases_t p;
+    snip_equals("sweep ext opens", ANLZ_OK, anlz_open_file(FIX "sweep_ANLZ0000.EXT", &a));
+    snip_equals("sweep phrases", ANLZ_OK, anlz_phrases(a, &p));
+    snip_assert("phrase 2", p.count == 8 && p.phrases[1].beat == 35 && p.phrases[1].kind == 2 && p.phrases[1].b == 1 && p.phrases[1].k2 == 1
+                && p.phrases[1].beat2 == 35 && p.phrases[1].beat3 == 51 && p.phrases[1].beat4 == 59 && !p.phrases[1].fill);
+    snip_assert("phrase 3 chorus k1", p.phrases[2].kind == 5 && p.phrases[2].k1 == 1);
+    snip_assert("phrase 5 fill", p.phrases[4].fill == 1 && p.phrases[4].beat_fill == 127);
+    snip_assert("names", !strcmp(anlz_phrase_name(p.mood, p.phrases[0].kind), "Intro") && !strcmp(anlz_phrase_name(1, 2), "Up")
+                && !strcmp(anlz_phrase_name(1, 3), "Down") && !strcmp(anlz_phrase_name(2, 8), "Bridge") && !strcmp(anlz_phrase_name(3, 6), "Verse 2")
+                && !strcmp(anlz_phrase_name(2, 11), "?") && !strcmp(anlz_phrase_name(9, 1), "?"));
+    snip_assert("bank names", !strcmp(anlz_bank_name(0), "Default") && !strcmp(anlz_bank_name(8), "Club 2") && !strcmp(anlz_bank_name(9), "?"));
+    anlz_phrases_free(&p);
+    anlz_close(a);
+}
+
+/* synthetic PSSI: plain and masked, lying counts, bad mood */
+static uint8_t *pssi_file(int mask, uint16_t mood, uint16_t claimed, uint16_t real, uint32_t *len)
+{
+    uint32_t body_len = 0x20 - 0x0c + real * 24;           /* from 0x0c */
+    uint8_t *body = calloc(1, body_len);
+    body[3] = 24;                                           /* len_entry_bytes */
+    body[4] = (uint8_t)(claimed >> 8); body[5] = (uint8_t)claimed;
+    body[6] = (uint8_t)(mood >> 8); body[7] = (uint8_t)mood;
+    body[0x1a - 0x0c] = 0x01; body[0x1b - 0x0c] = 0x2c;    /* end_beat 300 */
+    body[0x1e - 0x0c] = 3;                                  /* bank Hot */
+    for (uint16_t i = 0; i < real; i++) {
+        uint8_t *e = body + (0x20 - 0x0c) + i * 24;
+        e[1] = (uint8_t)(i + 1); e[3] = (uint8_t)(1 + i * 16); e[5] = (uint8_t)(i % 2 ? 6 : 1);
+    }
+    if (mask) for (uint32_t i = 6; i < body_len; i++) body[i] ^= (uint8_t)(KEY[(i - 6) % 19] + claimed);   /* from file offset 0x12 */
+    anlz_fake_t *b = anlz_fake_begin();
+    anlz_fake_add_tag(b, "PSSI", 0x20, body, body_len);
+    free(body);
+    return anlz_fake_finish(b, len);
+}
+
+static void pssi_case(const char *name, int mask)
+{
+    uint32_t len;
+    uint8_t *buf = pssi_file(mask, 3, 4, 4, &len);
+    anlz_t *a = NULL;
+    anlz_phrases_t p;
+    char msg[96];
+    snprintf(msg, sizeof msg, "%s: opens", name);
+    if (!snip_equals(msg, ANLZ_OK, anlz_open_mem(buf, len, &a))) { free(buf); return; }
+    snprintf(msg, sizeof msg, "%s: parses", name);
+    snip_equals(msg, ANLZ_OK, anlz_phrases(a, &p));
+    snprintf(msg, sizeof msg, "%s: fields", name);
+    snip_assert(msg, p.mood == 3 && p.end_beat == 300 && p.bank == 3 && p.count == 4 && p.encrypted == mask && !p.damaged);
+    snip_assert(msg, p.count == 4 && p.phrases[3].index == 4 && p.phrases[3].beat == 49 && p.phrases[3].kind == 6 && p.phrases[2].kind == 1);
+    anlz_phrases_free(&p);
+    anlz_close(a);
+    free(buf);
+}
+
+static void test_pssi_synthetic(void)
+{
+    pssi_case("pssi plain", 0);
+    pssi_case("pssi masked", 1);
+
+    uint32_t len;
+    anlz_t *a = NULL;
+    anlz_phrases_t p;
+    uint8_t *buf = pssi_file(0, 2, 40, 3, &len);          /* claims 40 phrases, holds 3 */
+    anlz_open_mem(buf, len, &a);
+    snip_equals("pssi lying count", ANLZ_OK, anlz_phrases(a, &p));
+    snip_assert("pssi lying count: clamped", p.count == 3 && p.damaged);
+    anlz_phrases_free(&p);
+    anlz_close(a); free(buf);
+
+    buf = pssi_file(0, 7, 2, 2, &len);                     /* mood 7 does not exist */
+    anlz_open_mem(buf, len, &a);
+    snip_equals("pssi bad mood", ANLZ_ERR_BAD_LEN, anlz_phrases(a, &p));
+    snip_assert("pssi bad mood: nothing returned", p.count == 0 && p.phrases == NULL);
+    anlz_close(a); free(buf);
+
+    buf = pssi_file(0, 1, 0, 0, &len);                     /* no phrases */
+    anlz_open_mem(buf, len, &a);
+    snip_assert("pssi empty", anlz_phrases(a, &p) == ANLZ_OK && p.count == 0 && p.phrases == NULL);
+    anlz_close(a); free(buf);
+
+    snip_equals("pssi NULL", ANLZ_ERR_BAD_LEN, anlz_phrases(NULL, &p));
+    snip_equals("pwvc NULL", ANLZ_ERR_BAD_LEN, anlz_wave_gains(NULL, NULL));
+
+    anlz_fake_t *b = anlz_fake_begin();
+    uint8_t short_body[8] = { 0 };
+    anlz_fake_add_tag(b, "PSSI", 0x20, short_body, sizeof short_body);   /* tag shorter than its own header */
+    buf = anlz_fake_finish(b, &len);
+    anlz_open_mem(buf, len, &a);
+    snip_equals("pssi too short", ANLZ_ERR_BAD_LEN, anlz_phrases(a, &p));
+    anlz_close(a); free(buf);
+}
+
+int main(int argc, char *argv[])
+{
+    (void)argc; (void)argv;
+    for (size_t i = 0; i < sizeof FX / sizeof FX[0]; i++) check_fixture(&FX[i]);
+    test_sweep_band_order();
+    test_sweep_phrase_details();
+    test_pssi_synthetic();
+
+    if (errors) {
+        fprintf(stdout, "[fail] %d error(s)\n", errors);
+        return 1;
+    }
+    fprintf(stdout, "[pass] anlz_2ex_test\n");
+    return 0;
+}

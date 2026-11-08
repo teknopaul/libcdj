@@ -189,7 +189,9 @@ anlz_err_t anlz_path(const anlz_t *a, const char **utf8)
 }
 
 /* ---- beat grid ----
- * PQTZ (.DAT, header 0x18): 0x14 u32 len_beats, then 8-byte entries u16 beat, u16 tempo, u32 ms.
+ * PQTZ (.DAT, header 0x18): 0x10 u16 0x0008, 0x12 s16 grid shift in ms (a player that moves the grid start writes it
+ *   there and leaves the entries alone; real beat time = entry + shift), 0x14 u32 len_beats,
+ *   then 8-byte entries u16 beat, u16 tempo, u32 ms.
  * PQT2 (.EXT, header 0x38): 0x18 first beat (u16 number, u16 tempo, u32 ms), 0x20 last beat (same),
  *   0x28 u32 beat count, 0x38 one u16 per beat: microseconds after the millisecond (0..999). */
 #define PQTZ_HEADER 0x18
@@ -221,6 +223,7 @@ anlz_err_t anlz_beatgrid(const anlz_t *a, anlz_beatgrid_t *out)
         out->count = claimed < avail ? claimed : avail;
         out->clamped = claimed > avail;
         out->pqtz = t->data + PQTZ_HEADER;
+        out->shift_ms = (int16_t)be16(t->data + 0x12);
         out->monotonic = grid_monotonic(out);
         return ANLZ_OK;
     }
@@ -265,8 +268,11 @@ int anlz_beat_at(const anlz_beatgrid_t *g, uint32_t i, anlz_beat_t *out)
         const uint8_t *e = g->pqtz + (size_t)i * 8;
         out->beat_number = be16(e);
         out->bpm_x100 = be16(e + 2);
-        out->time_ms = be32(e + 4);
-        if (g->sub) out->sub_ms_us = be16(g->sub + (size_t)i * 2);
+        int64_t t = (int64_t)be32(e + 4) + g->shift_ms;
+        out->time_ms = t < 0 ? 0 : (uint32_t)t;
+        out->time_signed_ms = t > INT32_MAX ? INT32_MAX : (int32_t)t;
+        /* the PQT2 fractions belong to the unshifted grid: a moved grid start is a whole new position */
+        if (g->sub && g->shift_ms == 0) out->sub_ms_us = be16(g->sub + (size_t)i * 2);
         return 1;
     }
     /* PQT2 only: the beats lie on a straight line between the two anchors (checked on real data:
@@ -278,6 +284,7 @@ int anlz_beat_at(const anlz_beatgrid_t *g, uint32_t i, anlz_beat_t *out)
     out->beat_number = (uint16_t)((g->first_number + i - 1) % 4 + 1);
     out->bpm_x100 = g->tempo;
     out->time_ms = (uint32_t)(x / 1000);
+    out->time_signed_ms = (int32_t)out->time_ms;
     out->sub_ms_us = (uint16_t)(x % 1000);
     return 1;
 }
@@ -309,8 +316,8 @@ double anlz_avg_bpm(const anlz_beatgrid_t *g)
     anlz_beat_t first, last;
     anlz_beat_at(g, 0, &first);
     anlz_beat_at(g, g->count - 1, &last);
-    if (last.time_ms <= first.time_ms) return 0.0;
-    return 60000.0 * (double)(g->count - 1) / (double)(last.time_ms - first.time_ms);
+    if (last.time_signed_ms <= first.time_signed_ms) return 0.0;
+    return 60000.0 * (double)(g->count - 1) / ((double)last.time_signed_ms - (double)first.time_signed_ms);
 }
 
 int anlz_is_damaged(const anlz_t *a)
@@ -325,7 +332,8 @@ int anlz_file_len_ok(const anlz_t *a)
 
 /* ---- cues ----
  * PCOB (header 0x18): 0x0c u32 list type (0 memory, 1 hot), 0x12 u16 len_cues, entries PCPT (0x38 bytes):
- *   0x0c hot_cue u32, 0x10 status u32, 0x1c type u8 (1 point, 2 loop), 0x20 time u32, 0x24 loop_time u32.
+ *   0x0c hot_cue u32, 0x10 status u32, 0x1c type u8 (1 point, 2 loop), 0x20 time u32, 0x24 loop_time u32,
+ *   0x28..0x37 on a VBR mp3: start/end in 1/75 s, start/end byte offset.
  * PCO2 (header 0x14): 0x0c u32 list type, 0x10 u16 len_cues, variable PCP2 entries (own len_entry @0x08):
  *   0x0c hot_cue u32, 0x10 type u8, 0x14 time u32, 0x18 loop_time u32, 0x1c color_id u8, 0x1d..0x1f raw,
  *   0x24 u16 loop numerator, 0x26 u16 denominator, 0x28 u32 len_comment, 0x2c comment UTF-16BE, then
@@ -344,6 +352,17 @@ static int parse_pcpt(const uint8_t *e, uint32_t len, uint32_t list_type, anlz_c
     c->marker = ((uint32_t)e[0x1d] << 16) | ((uint32_t)e[0x1e] << 8) | e[0x1f];
     c->time_ms = be32(e + 0x20);
     c->loop_time_ms = c->is_loop ? be32(e + 0x24) : 0;
+    if (len >= 0x38) {
+        const uint32_t frame = be32(e + 0x28);
+        const uint64_t expect = (uint64_t)c->time_ms * 75 / 1000;
+        if (frame != 0xffffffffu && frame + 1 >= expect && frame <= expect + 1 && be32(e + 0x30) != 0xffffffffu) {
+            c->has_seek = 1;
+            c->seek_frame75 = frame;
+            c->seek_end_frame75 = be32(e + 0x2c);
+            c->seek_byte = be32(e + 0x30);
+            c->seek_end_byte = be32(e + 0x34);
+        }
+    }
     (void)list_type;
     return 1;
 }
@@ -461,7 +480,8 @@ void anlz_cue_list_free(anlz_cue_list_t *list)
 /* ---- waveforms ----
  * PWAV/PWV2 (header 0x14): 0x0c u32 len_preview (= entries, 1 byte each), 0x10 unknown, data at 0x14.
  * PWV3/PWV4/PWV5/PWV7 (header 0x18): 0x0c u32 len_entry_bytes, 0x10 u32 len_entries, 0x14 unknown, data at 0x18.
- * PWV6 (header 0x14): 0x0c len_entry_bytes, 0x10 len_entries, data at 0x14. */
+ * PWV6 (header 0x14): 0x0c len_entry_bytes, 0x10 len_entries, data at 0x14.
+ * PWV7 0x14 is 0x00960000 in every sample (150 columns/s). 3-band entries are low, mid, high. */
 static const struct {
     anlz_wave_kind_t kind;
     const char      *fourcc;
@@ -534,9 +554,9 @@ int anlz_wave_column(const anlz_waveform_t *w, uint32_t i, anlz_wave_column_t *o
         }
         case ANLZ_WAVE_3BAND_PREVIEW:
         case ANLZ_WAVE_3BAND_DETAIL:
-            out->mid = e[0];
-            out->high = e[1];
-            out->low = e[2];
+            out->low = e[0];          /* verified on a 20 kHz -> 20 Hz sweep: byte 2 peaks first, byte 0 last */
+            out->mid = e[1];
+            out->high = e[2];
             out->height = out->mid > out->high ? (out->mid > out->low ? out->mid : out->low)
                                                : (out->high > out->low ? out->high : out->low);
             break;
@@ -756,6 +776,154 @@ anlz_err_t anlz_track_waveform(const anlz_track_t *t, anlz_wave_kind_t kind, anl
         if (err == ANLZ_OK) return ANLZ_OK;
     }
     return err;
+}
+
+/* ---- PWVC (.2EX): the three band gains of the 3-band waveforms ----
+ * header 0x0e, len_tag 20: 0x0c u16 0, 0x0e u16 low, 0x10 u16 mid, 0x12 u16 high (e.g. 145, 249, 500) */
+anlz_err_t anlz_wave_gains(const anlz_t *a, anlz_wave_gains_t *out)
+{
+    if (!a || !out) return ANLZ_ERR_BAD_LEN;
+    memset(out, 0, sizeof *out);
+    const anlz_tag_t *t = find_tag(a, "PWVC", 0);
+    if (!t) return ANLZ_ERR_ABSENT;
+    if (t->len_tag < 0x14 || t->len_header < 0x0e) return ANLZ_ERR_BAD_LEN;
+    out->low = be16(t->data + 0x0e);
+    out->mid = be16(t->data + 0x10);
+    out->high = be16(t->data + 0x12);
+    return ANLZ_OK;
+}
+
+/* ---- PSSI (.EXT): phrase analysis ("song structure") ----
+ * header 0x20: 0x0c u32 len_entry_bytes (24), 0x10 u16 len_entries, then from 0x12 the part that rekordbox 6+ XORs:
+ *   0x12 u16 mood (1 high, 2 mid, 3 low), 0x14 u32 ?, 0x18 u16 ?, 0x1a u16 end_beat, 0x1c u16 ?, 0x1e u8 bank, 0x1f u8 ?
+ *   then len_entries x 24 bytes: u16 index, u16 beat, u16 kind, u8 ?, u8 k1, u8 ?, u8 k2, u8 ?, u8 b, u16 beat2, u16 beat3,
+ *   u16 beat4, u8 ?, u8 k3, u8 ?, u8 fill, u16 beat_fill.
+ * The mask is a 19 byte key cycled from 0x12 on; each key byte is (KEY[i] + len_entries) mod 256 (verified on 3 real files;
+ * the mask starting at the mood field answers the old "XOR start offset" question). An unmasked tag is accepted too. */
+#define PSSI_HEADER 0x20
+#define PSSI_ENTRY  24
+
+static const uint8_t PSSI_KEY[19] = {
+    0xCB, 0xE1, 0xEE, 0xFA, 0xE5, 0xEE, 0xAD, 0xEE, 0xE9, 0xD2, 0xE9, 0xEB, 0xE1, 0xE9, 0xF3, 0xE8, 0xE9, 0xF4, 0xE1
+};
+
+static uint8_t pssi_byte(const uint8_t *p, size_t i, uint16_t n, int encrypted)
+{
+    return encrypted ? (uint8_t)(p[i] ^ (uint8_t)(PSSI_KEY[i % 19] + n)) : p[i];
+}
+
+anlz_err_t anlz_phrases(const anlz_t *a, anlz_phrases_t *out)
+{
+    if (!a || !out) return ANLZ_ERR_BAD_LEN;
+    memset(out, 0, sizeof *out);
+    const anlz_tag_t *t = find_tag(a, "PSSI", 0);
+    if (!t) return ANLZ_ERR_ABSENT;
+    if (t->len_tag < PSSI_HEADER || t->len_header < PSSI_HEADER || be32(t->data + 0x0c) != PSSI_ENTRY) return ANLZ_ERR_BAD_LEN;
+    uint16_t claimed = be16(t->data + 0x10);
+    const uint8_t *body = t->data + 0x12;                  /* the masked part */
+    size_t body_len = t->len_tag - 0x12;
+    uint16_t mood_plain = be16(body);
+    uint16_t mood_dec = (uint16_t)((pssi_byte(body, 0, claimed, 1) << 8) | pssi_byte(body, 1, claimed, 1));
+    int encrypted = !(mood_plain >= 1 && mood_plain <= 3) && mood_dec >= 1 && mood_dec <= 3;
+    uint16_t mood = encrypted ? mood_dec : mood_plain;
+    if (mood < 1 || mood > 3) return ANLZ_ERR_BAD_LEN;
+
+    uint32_t avail = (uint32_t)((body_len - (PSSI_HEADER - 0x12)) / PSSI_ENTRY);
+    out->mood = mood;
+    out->encrypted = encrypted;
+    out->end_beat = (uint16_t)((pssi_byte(body, 0x1a - 0x12, claimed, encrypted) << 8) | pssi_byte(body, 0x1b - 0x12, claimed, encrypted));
+    out->bank = pssi_byte(body, 0x1e - 0x12, claimed, encrypted);
+    out->count = claimed < avail ? claimed : avail;
+    out->damaged = claimed > avail;
+    if (out->count == 0) return ANLZ_OK;
+    out->phrases = calloc(out->count, sizeof *out->phrases);
+    if (!out->phrases) { memset(out, 0, sizeof *out); return ANLZ_ERR_NOMEM; }
+    for (uint32_t i = 0; i < out->count; i++) {
+        uint8_t e[PSSI_ENTRY];
+        size_t base = (PSSI_HEADER - 0x12) + (size_t)i * PSSI_ENTRY;
+        for (size_t k = 0; k < PSSI_ENTRY; k++) e[k] = pssi_byte(body, base + k, claimed, encrypted);
+        anlz_phrase_t *ph = &out->phrases[i];
+        ph->index = be16(e); ph->beat = be16(e + 2); ph->kind = be16(e + 4);
+        ph->k1 = e[7]; ph->k2 = e[9]; ph->b = e[11];
+        ph->beat2 = be16(e + 12); ph->beat3 = be16(e + 14); ph->beat4 = be16(e + 16);
+        ph->k3 = e[19]; ph->fill = e[21]; ph->beat_fill = be16(e + 22);
+    }
+    return ANLZ_OK;
+}
+
+void anlz_phrases_free(anlz_phrases_t *p)
+{
+    if (!p) return;
+    free(p->phrases);
+    memset(p, 0, sizeof *p);
+}
+
+const char *anlz_phrase_name(uint16_t mood, uint16_t kind)
+{
+    static const char *const MID[] = { "Intro", "Verse 1", "Verse 2", "Verse 3", "Verse 4", "Verse 5", "Verse 6", "Bridge", "Chorus", "Outro" };
+    static const char *const LOW[] = { "Intro", "Verse 1", "Verse 1", "Verse 1", "Verse 2", "Verse 2", "Verse 2", "Bridge", "Chorus", "Outro" };
+    switch (mood) {
+        case 1:
+            switch (kind) {
+                case 1: return "Intro";
+                case 2: return "Up";
+                case 3: return "Down";
+                case 5: return "Chorus";
+                case 6: return "Outro";
+            }
+            break;
+        case 2: if (kind >= 1 && kind <= 10) return MID[kind - 1]; break;
+        case 3: if (kind >= 1 && kind <= 10) return LOW[kind - 1]; break;
+    }
+    return "?";
+}
+
+const char *anlz_bank_name(uint8_t bank)
+{
+    static const char *const N[] = { "Default", "Cool", "Natural", "Hot", "Subtle", "Warm", "Vivid", "Club 1", "Club 2" };
+    return bank < sizeof N / sizeof N[0] ? N[bank] : "?";
+}
+
+anlz_err_t anlz_track_phrases(const anlz_track_t *t, anlz_phrases_t *out)
+{
+    if (!t || !out) return ANLZ_ERR_BAD_LEN;
+    memset(out, 0, sizeof *out);
+    if (!t->file[ANLZ_FILE_EXT]) return ANLZ_ERR_ABSENT;
+    return anlz_phrases(t->file[ANLZ_FILE_EXT], out);
+}
+
+/* ---- cue colours ----
+ * Hot cue colour index (PCP2, the byte before the RGB triple after the comment): 0 = none (green on older players), 1..62 the rekordbox palette below
+ * (rekordcrate's table, from the community text; the first entries are blues, then greens, yellows, oranges, reds, pinks, purples). The RGB triple stored
+ * next to it is what the player's LEDs show and is "similar but not identical". Memory cue colours (PCP2 byte 0x1c) are a separate list of 8 names. */
+static const uint32_t HOT_CUE_PALETTE[62] = {
+    0x305aff, 0x5073ff, 0x508cff, 0x50a0ff, 0x50b4ff, 0x50b0f2,
+    0x50aee8, 0x45acdb, 0x00e0ff, 0x19daf0, 0x32d2e6, 0x21b4b9,
+    0x20aaa0, 0x1fa392, 0x19a08c, 0x14a584, 0x14aa7d, 0x10b176,
+    0x30d26e, 0x37de5a, 0x3ceb50, 0x28e214, 0x7dc13d, 0x8cc832,
+    0x9bd723, 0xa5e116, 0xa5dc0a, 0xaad208, 0xb4c805, 0xb4be04,
+    0xbab404, 0xc3af04, 0xe1aa00, 0xffa000, 0xff9600, 0xff8c00,
+    0xff7500, 0xe0641b, 0xe0461e, 0xe0301e, 0xe02823, 0xe62828,
+    0xff376f, 0xff2d6f, 0xff127b, 0xf51e8c, 0xeb2da0, 0xe637b4,
+    0xde44cf, 0xde448d, 0xe630b4, 0xe619dc, 0xe600ff, 0xdc00ff,
+    0xcc00ff, 0xb432ff, 0xb93cff, 0xc542ff, 0xaa5aff, 0xaa72ff,
+    0x8272ff, 0x6473ff,
+};
+
+int anlz_cue_palette(uint8_t index, uint8_t *red, uint8_t *green, uint8_t *blue)
+{
+    if (index < 1 || index > 62) return 0;
+    uint32_t c = HOT_CUE_PALETTE[index - 1];
+    if (red) *red = (uint8_t)(c >> 16);
+    if (green) *green = (uint8_t)(c >> 8);
+    if (blue) *blue = (uint8_t)c;
+    return 1;
+}
+
+const char *anlz_memory_color_name(uint8_t id)
+{
+    static const char *const N[] = { "None", "Pink", "Red", "Orange", "Yellow", "Green", "Aqua", "Blue", "Purple" };
+    return id < sizeof N / sizeof N[0] ? N[id] : "?";
 }
 
 //SNIP_anlz_core

@@ -1,0 +1,17 @@
+ANLZ .2EX / PSSI test fixtures
+==============================
+
+Real rekordbox 6 analysis files copied byte for byte from rekordcrate's test data
+(https://github.com/Holzhaus/rekordcrate, commit 68cd702, data/anlz/sweep and
+data/complete_export/demo_tracks/PIONEER/USBANLZ/{P016/0000875E,P053/0001D21F}).
+rekordcrate is licensed MPL-2.0 (COPYING-MPL-2.0 here); the files are test data, not code.
+Names: <P-dir>_<id-dir>_ANLZ0000.<ext>, like ../anlz; never edit them (SHA256SUMS, checked by make check-fixtures).
+
+sweep          a 20 kHz -> 20 Hz frequency sweep played three times (stereo, left only, right only; see sweep_README),
+               257 beats; PSSI: mood high, 8 phrases (Intro, Up, Chorus, Down, Up, Up, Down, Outro), the only sample with
+               k1/k2, beat2..4 and a fill; PWV7 22500 entries
+P016_0000875E  PSSI mood mid, 19 phrases (starts with a chorus), end beat 353; PWV7 25866 entries; 368 beats
+P053_0001D21F  PSSI mood mid, 11 phrases (Intro ... Outro), end beat 257; PWV7 19208 entries; 257 beats
+
+What they are for: PSSI (XOR masked, mask begins at the mood field), PWV6, PWV7, PWVC and the .2EX container,
+none of which occur in ../anlz.  Tested by anlz_2ex_test.

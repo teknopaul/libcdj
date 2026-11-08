@@ -116,11 +116,11 @@ static void test_color_preview_and_3band(void)
     snip_assert("pwv4: raw 6 bytes, no decoding", anlz_wave_column(&w, 1, &c) && c.raw[0] == 36 && c.raw[5] == 16 && c.height == 0);
     anlz_close(a); free(buf);
 
-    const uint8_t b3[6] = { 10, 20, 30, 40, 5, 6 };               /* mid, high, low */
+    const uint8_t b3[6] = { 10, 20, 30, 40, 5, 6 };               /* low, mid, high */
     a = wave_file("PWV6", 3, 2, b3, 6, &buf);
     snip_equals("pwv6: ok", ANLZ_OK, anlz_waveform(a, ANLZ_WAVE_3BAND_PREVIEW, &w));
-    snip_assert("pwv6: bands", anlz_wave_column(&w, 0, &c) && c.mid == 10 && c.high == 20 && c.low == 30 && c.height == 30);
-    snip_assert("pwv6: bands 2", anlz_wave_column(&w, 1, &c) && c.mid == 40 && c.high == 5 && c.low == 6 && c.height == 40);
+    snip_assert("pwv6: bands", anlz_wave_column(&w, 0, &c) && c.low == 10 && c.mid == 20 && c.high == 30 && c.height == 30);
+    snip_assert("pwv6: bands 2", anlz_wave_column(&w, 1, &c) && c.low == 40 && c.mid == 5 && c.high == 6 && c.height == 40);
     snip_assert("pwv6: preview has no rate", w.entries_per_sec == 0.0);
     anlz_close(a); free(buf);
     a = wave_file("PWV7", 3, 2, b3, 6, &buf);

@@ -119,6 +119,29 @@ static void test_utf16_decode(void)
     snip_equals("utf16: too small", -1, utf16le_decode(a, sizeof a, out, 4));
 }
 
+/* DeviceSQL string kinds (the decoder is static in pdb.c, which is part of this translation unit) */
+static void test_devicesql_kinds(void)
+{
+    char *s;
+    const uint8_t shortA[] = { 0x09, 'f', 'o', 'o' };
+    s = devicesql_to_utf8(shortA, sizeof shortA);
+    snip_assert("devicesql: short ascii", s && !strcmp(s, "foo")); free(s);
+    const uint8_t longA[] = { 0x40, 0x08, 0x00, 0x00, 'a', 'b', 'c', 'd' };
+    s = devicesql_to_utf8(longA, sizeof longA);
+    snip_assert("devicesql: long ascii", s && !strcmp(s, "abcd")); free(s);
+    const uint8_t u16[] = { 0x90, 0x0a, 0x00, 0x00, 'h', 0, 0x6B, 0x01, 'x', 0 };
+    s = devicesql_to_utf8(u16, sizeof u16);
+    snip_assert("devicesql: utf16", s && !strcmp(s, "h\xc5\xabx")); free(s);
+    /* ISRC (rekordbox's odd form): 0x90, total = 4 + 14, 0x00, 0x03, 12 ASCII bytes, NUL */
+    const uint8_t isrc[] = { 0x90, 0x12, 0x00, 0x00, 0x03, 'G','B','A','H','T','0','5','0','0','5','9','4', 0x00 };
+    s = devicesql_to_utf8(isrc, sizeof isrc);
+    snip_assert("devicesql: isrc", s && !strcmp(s, "GBAHT0500594")); free(s);
+    /* UTF-16 text that merely ends in a zero byte stays UTF-16 */
+    const uint8_t not_isrc[] = { 0x90, 0x0a, 0x00, 0x00, 'a', 0, 'b', 0, 'c', 0 };
+    s = devicesql_to_utf8(not_isrc, sizeof not_isrc);
+    snip_assert("devicesql: utf16 not mistaken for isrc", s && !strcmp(s, "abc")); free(s);
+}
+
 /* Test 4: Bad / short input returns -1 */
 static void test_bad_input(void)
 {
@@ -224,6 +247,7 @@ int main(int argc, char *argv[])
     test_fake_pdb_id();
     test_bpm_zero();
     test_utf16_decode();
+    test_devicesql_kinds();
     test_bad_input();
     test_real_fixture();
 
